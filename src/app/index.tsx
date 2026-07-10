@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { PixivNovelItem } from '@book000/pixivts';
 
+import { PixivLoginModal } from '@/components/pixiv-login-modal';
 import { connectAndFetchNovelRanking } from '@/lib/pixiv';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
@@ -22,9 +23,10 @@ const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 export default function HomeScreen() {
   const [refreshToken, setRefreshToken] = useState('');
   const [novels, setNovels] = useState<PixivNovelItem[]>([]);
-  const [status, setStatus] = useState('refresh tokenを入れて疎通確認しよう');
+  const [status, setStatus] = useState('Pixivへログインして疎通確認しよう');
   const [isLoading, setIsLoading] = useState(false);
   const [isTokenLoaded, setIsTokenLoaded] = useState(false);
+  const [isLoginVisible, setIsLoginVisible] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -35,11 +37,11 @@ export default function HomeScreen() {
 
         if (isMounted && savedToken) {
           setRefreshToken(savedToken);
-          setStatus('保存済みのrefresh tokenを読み込んだよ');
+          setStatus('保存済みのログイン情報を読み込んだよ');
         }
       } catch {
         if (isMounted) {
-          setStatus('SecureStoreを読めなかったので、tokenを手入力してね');
+          setStatus('SecureStoreを読めなかったので、もう一度ログインしてね');
         }
       } finally {
         if (isMounted) {
@@ -55,7 +57,7 @@ export default function HomeScreen() {
     };
   }, []);
 
-  async function handleConnect() {
+  async function connectWithToken(token: string) {
     if (isLoading) {
       return;
     }
@@ -65,7 +67,7 @@ export default function HomeScreen() {
     setStatus('Pixivへ接続中…');
 
     try {
-      const result = await connectAndFetchNovelRanking(refreshToken);
+      const result = await connectAndFetchNovelRanking(token);
 
       await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, result.refreshToken);
       setRefreshToken(result.refreshToken);
@@ -81,6 +83,12 @@ export default function HomeScreen() {
     }
   }
 
+  async function handleWebViewLoginSuccess(token: string) {
+    setIsLoginVisible(false);
+    setRefreshToken(token);
+    await connectWithToken(token);
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
@@ -93,14 +101,64 @@ export default function HomeScreen() {
         >
           <View style={styles.hero}>
             <Text style={styles.eyebrow}>PIXIV NOVEL READER</Text>
-            <Text style={styles.title}>まずはAPI疎通テスト</Text>
+            <Text style={styles.title}>Pixiv小説を、読むためのアプリ。</Text>
             <Text style={styles.description}>
-              @book000/pixivtsをExpoから直接呼んで、小説デイリーランキングを取得する。
+              アプリ内のPixivログイン画面から認証して、小説ランキングを取得する。
             </Text>
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.label}>Pixiv refresh token</Text>
+            <Text style={styles.cardTitle}>Pixivアカウント</Text>
+            <Text style={styles.cardDescription}>
+              IDとパスワードはPixivのWebViewへ直接入力される。アプリが保存するのはrefresh tokenだけ。
+            </Text>
+
+            <Pressable
+              accessibilityRole="button"
+              disabled={isLoading || !isTokenLoaded}
+              onPress={() => {
+                setIsLoginVisible(true);
+              }}
+              style={({ pressed }) => [
+                styles.loginButton,
+                pressed && styles.buttonPressed,
+                (isLoading || !isTokenLoaded) && styles.buttonDisabled,
+              ]}
+            >
+              <Text style={styles.loginButtonText}>Pixivでログイン</Text>
+            </Pressable>
+
+            {refreshToken.length > 0 && (
+              <Pressable
+                accessibilityRole="button"
+                disabled={isLoading}
+                onPress={() => {
+                  void connectWithToken(refreshToken);
+                }}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  pressed && styles.buttonPressed,
+                  isLoading && styles.buttonDisabled,
+                ]}
+              >
+                {isLoading ? (
+                  <ActivityIndicator color="#0096FA" />
+                ) : (
+                  <Text style={styles.secondaryButtonText}>
+                    保存済みログインで再接続
+                  </Text>
+                )}
+              </Pressable>
+            )}
+
+            <Text style={styles.status}>{status}</Text>
+          </View>
+
+          <View style={styles.fallbackCard}>
+            <Text style={styles.fallbackTitle}>手動token入力</Text>
+            <Text style={styles.fallbackDescription}>
+              WebViewログインが使えない場合だけ使う予備ルート。
+            </Text>
             <TextInput
               autoCapitalize="none"
               autoCorrect={false}
@@ -113,27 +171,21 @@ export default function HomeScreen() {
               style={styles.input}
               value={refreshToken}
             />
-
             <Pressable
               accessibilityRole="button"
-              disabled={isLoading || !isTokenLoaded}
+              disabled={isLoading || refreshToken.trim().length === 0}
               onPress={() => {
-                void handleConnect();
+                void connectWithToken(refreshToken);
               }}
               style={({ pressed }) => [
-                styles.button,
+                styles.manualButton,
                 pressed && styles.buttonPressed,
-                (isLoading || !isTokenLoaded) && styles.buttonDisabled,
+                (isLoading || refreshToken.trim().length === 0) &&
+                  styles.buttonDisabled,
               ]}
             >
-              {isLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Text style={styles.buttonText}>接続してランキング取得</Text>
-              )}
+              <Text style={styles.manualButtonText}>tokenで接続</Text>
             </Pressable>
-
-            <Text style={styles.status}>{status}</Text>
           </View>
 
           {novels.length > 0 && (
@@ -154,7 +206,8 @@ export default function HomeScreen() {
                       {novel.user.name}
                     </Text>
                     <Text style={styles.metadata}>
-                      {novel.textLength.toLocaleString()}文字・♡{novel.totalBookmarks.toLocaleString()}
+                      {novel.textLength.toLocaleString()}文字・♡
+                      {novel.totalBookmarks.toLocaleString()}
                     </Text>
                   </View>
                 </View>
@@ -163,6 +216,15 @@ export default function HomeScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {isLoginVisible && (
+        <PixivLoginModal
+          onClose={() => {
+            setIsLoginVisible(false);
+          }}
+          onSuccess={handleWebViewLoginSuccess}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -198,6 +260,7 @@ const styles = StyleSheet.create({
     fontSize: 30,
     fontWeight: '800',
     letterSpacing: -0.7,
+    lineHeight: 39,
   },
   description: {
     color: '#65717D',
@@ -218,38 +281,87 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     elevation: 3,
   },
-  label: {
+  cardTitle: {
     color: '#303842',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  cardDescription: {
+    color: '#65717D',
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  loginButton: {
+    minHeight: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    backgroundColor: '#0096FA',
+  },
+  loginButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  secondaryButton: {
+    minHeight: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#A9DBFC',
+    borderRadius: 14,
+    backgroundColor: '#F2FAFF',
+  },
+  secondaryButtonText: {
+    color: '#0088E5',
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '800',
+  },
+  fallbackCard: {
+    padding: 17,
+    borderWidth: 1,
+    borderColor: '#DDE5EB',
+    borderRadius: 18,
+    backgroundColor: '#F9FBFC',
+    gap: 11,
+  },
+  fallbackTitle: {
+    color: '#3B4650',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  fallbackDescription: {
+    color: '#74808A',
+    fontSize: 12,
+    lineHeight: 18,
   },
   input: {
-    minHeight: 52,
+    minHeight: 50,
     paddingHorizontal: 15,
     borderWidth: 1,
     borderColor: '#D9E1E8',
     borderRadius: 13,
-    backgroundColor: '#F9FBFC',
+    backgroundColor: '#FFFFFF',
     color: '#20262E',
     fontSize: 15,
   },
-  button: {
-    minHeight: 52,
+  manualButton: {
+    minHeight: 46,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 13,
-    backgroundColor: '#0096FA',
+    borderRadius: 12,
+    backgroundColor: '#35404A',
+  },
+  manualButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
   buttonPressed: {
     opacity: 0.78,
   },
   buttonDisabled: {
     opacity: 0.55,
-  },
-  buttonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '800',
   },
   status: {
     color: '#596570',

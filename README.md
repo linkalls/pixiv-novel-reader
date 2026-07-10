@@ -5,6 +5,8 @@ Expo 57 + TypeScript + Bunで作るPixiv小説リーダー。
 
 ## 現在できること
 
+- アプリ内WebViewからPixivへログイン
+- PKCEのauthorization codeをrefresh tokenへ交換
 - Pixiv refresh tokenを`expo-secure-store`へ保存
 - `@book000/pixivts`でPixivへログイン
 - 小説デイリーランキングの先頭ページを取得
