@@ -95,6 +95,21 @@ async function getDatabase(): Promise<SQLiteDatabase> {
   return databasePromise;
 }
 
+/** 同じSQLiteへ機能別テーブルを追加する内部向けアクセサ。 */
+export async function getLibraryDatabase(): Promise<SQLiteDatabase> {
+  return getDatabase();
+}
+
+export type ReadingHistoryFilter = 'all' | 'reading' | 'finished' | 'offline';
+export type ReadingHistorySort = 'recent' | 'progress' | 'title';
+
+export interface ReadingHistoryQuery {
+  filter?: ReadingHistoryFilter;
+  limit?: number;
+  query?: string;
+  sort?: ReadingHistorySort;
+}
+
 export async function recordNovelOpened(
   detail: PixivNovelItem,
   progress = 0,
@@ -183,11 +198,46 @@ export async function getReadingHistory(
   return row ? mapHistoryRow(row) : null;
 }
 
-export async function listReadingHistory(limit = 100): Promise<LibraryNovel[]> {
+export async function listReadingHistory(
+  options: ReadingHistoryQuery = {},
+): Promise<LibraryNovel[]> {
   const database = await getDatabase();
+  const query = options.query?.trim().toLocaleLowerCase('ja-JP') ?? '';
+  const filter = options.filter ?? 'all';
+  const sort = options.sort ?? 'recent';
+  const limit = Math.max(1, Math.min(500, options.limit ?? 200));
+  const conditions: string[] = [];
+  const parameters: (number | string)[] = [];
+
+  if (query.length > 0) {
+    conditions.push(
+      '(LOWER(h.title) LIKE ? OR LOWER(h.author_name) LIKE ?)',
+    );
+    const likeQuery = `%${query}%`;
+    parameters.push(likeQuery, likeQuery);
+  }
+
+  if (filter === 'reading') {
+    conditions.push('h.is_finished = 0 AND h.progress < 0.985');
+  } else if (filter === 'finished') {
+    conditions.push('h.is_finished = 1');
+  } else if (filter === 'offline') {
+    conditions.push('o.novel_id IS NOT NULL');
+  }
+
+  const whereClause =
+    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const orderClause =
+    sort === 'progress'
+      ? 'ORDER BY h.is_finished ASC, h.progress DESC, h.last_read_at DESC'
+      : sort === 'title'
+        ? 'ORDER BY h.title COLLATE NOCASE ASC, h.last_read_at DESC'
+        : 'ORDER BY h.last_read_at DESC';
+
+  parameters.push(limit);
   const rows = await database.getAllAsync<HistoryRow>(
-    `${historySelectSql('')} ORDER BY h.last_read_at DESC LIMIT ?`,
-    limit,
+    `${historySelectSql(whereClause)} ${orderClause} LIMIT ?`,
+    ...parameters,
   );
 
   return rows.map(mapHistoryRow);

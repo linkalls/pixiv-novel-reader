@@ -1,6 +1,7 @@
 export interface ReaderRouteOptions {
   bookmarked?: boolean | null;
   resume?: boolean;
+  scrollOffset?: number;
 }
 
 /** 読書Routeへ渡すパラメータを一か所で組み立てる。 */
@@ -18,6 +19,14 @@ export function buildReaderRouteParams(
 
   if (options.resume) {
     params.resume = '1';
+  }
+
+  if (
+    options.scrollOffset !== undefined &&
+    Number.isFinite(options.scrollOffset) &&
+    options.scrollOffset >= 0
+  ) {
+    params.scrollOffset = String(options.scrollOffset);
   }
 
   return params;

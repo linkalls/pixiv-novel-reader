@@ -19,6 +19,14 @@ describe('buildReaderRouteParams', () => {
     });
   });
 
+
+  test('しおりのスクロール位置をRouteへ渡す', () => {
+    expect(buildReaderRouteParams(77, { scrollOffset: 1234.5 })).toEqual({
+      id: '77',
+      scrollOffset: '1234.5',
+    });
+  });
+
   test('未知のブックマーク状態はfalseに決めつけない', () => {
     expect(buildReaderRouteParams(45, { bookmarked: null })).toEqual({
       id: '45',

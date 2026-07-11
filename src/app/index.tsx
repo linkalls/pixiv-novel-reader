@@ -603,12 +603,15 @@ export default function HomeScreen() {
 
       {activeTab === 'library' ? (
         <LibraryView
-          onOpenNovel={(novelId, resume) => {
+          onOpenNovel={(novelId, resume, scrollOffset) => {
             router.push({
               pathname: '/novel/[id]',
               params: {
                 id: String(novelId),
                 ...(resume ? { resume: '1' } : {}),
+                ...(scrollOffset !== undefined
+                  ? { scrollOffset: String(scrollOffset) }
+                  : {}),
               },
             });
           }}

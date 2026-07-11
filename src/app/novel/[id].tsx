@@ -29,7 +29,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
+import { BookshelfPickerModal } from '@/components/bookshelf-picker-modal';
 import { NovelSeriesModal } from '@/components/novel-series-modal';
+import { ReaderMarksModal } from '@/components/reader-marks-modal';
+import { RecommendationExclusionsModal } from '@/components/recommendation-exclusions-modal';
 import { PixivNovelAjaxLoader } from '@/components/pixiv-novel-ajax-loader';
 import {
   ReaderNavigationModal,
@@ -52,6 +55,11 @@ import {
 } from '@/lib/library-db';
 import { emitNovelChanged } from '@/lib/novel-events';
 import {
+  excludeRecommendation,
+  listExcludedRecommendationIds,
+  type ReaderMark,
+} from '@/lib/organizer-db';
+import {
   buildDetailRouteParams,
   buildReaderRouteParams,
 } from '@/lib/reader-flow';
@@ -67,6 +75,14 @@ import {
   searchReaderBlocks,
   type ReaderTocEntry,
 } from '@/lib/reader-navigation';
+import {
+  createReaderMarkExcerpt,
+  findReaderBlockAtOffset,
+} from '@/lib/reader-marks';
+import {
+  getRecommendationReason,
+  type RecommendationSource,
+} from '@/lib/recommendation-reason';
 import {
   fetchNovelDetail,
   fetchNovelSeries,
@@ -180,12 +196,21 @@ export default function NovelReaderScreen() {
     bookmarked?: string | string[];
     id?: string | string[];
     resume?: string | string[];
+    scrollOffset?: string | string[];
   }>();
   const { colors, isDark: isAppDark } = useAppTheme();
   const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
   const rawResume = Array.isArray(params.resume)
     ? params.resume[0]
     : params.resume;
+  const rawScrollOffset = Array.isArray(params.scrollOffset)
+    ? params.scrollOffset[0]
+    : params.scrollOffset;
+  const parsedScrollOffset = Number(rawScrollOffset);
+  const directScrollOffset =
+    Number.isFinite(parsedScrollOffset) && parsedScrollOffset >= 0
+      ? parsedScrollOffset
+      : null;
   const novelId = Number(rawId);
   const isValidNovelId = Number.isInteger(novelId) && novelId > 0;
   const shouldResume = rawResume === '1';
@@ -215,6 +240,12 @@ export default function NovelReaderScreen() {
   );
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [isMoreVisible, setIsMoreVisible] = useState(false);
+  const [isBookshelfVisible, setIsBookshelfVisible] = useState(false);
+  const [isMarksVisible, setIsMarksVisible] = useState(false);
+  const [isExclusionsVisible, setIsExclusionsVisible] = useState(false);
+  const [excludedNovelIds, setExcludedNovelIds] = useState<Set<number>>(
+    () => new Set(),
+  );
   const [isNavigatorVisible, setIsNavigatorVisible] = useState(false);
   const [navigationMode, setNavigationMode] =
     useState<ReaderNavigationMode>('toc');
@@ -267,6 +298,15 @@ export default function NovelReaderScreen() {
     [readerContent],
   );
   const tocEntries = useMemo(() => buildReaderToc(blocks), [blocks]);
+  const currentMarkBlockIndex = findReaderBlockAtOffset(
+    blockOffsetsRef.current,
+    novelBodyOffsetRef.current,
+    currentScrollOffsetRef.current,
+  );
+  const currentMarkExcerpt = createReaderMarkExcerpt(
+    blocks,
+    currentMarkBlockIndex,
+  );
   const searchMatches = useMemo(
     () => searchReaderBlocks(blocks, searchQuery),
     [blocks, searchQuery],
@@ -281,12 +321,25 @@ export default function NovelReaderScreen() {
     () => getAdjacentSeriesNovels(seriesNovels, novelId),
     [novelId, seriesNovels],
   );
+  const relatedItems = useMemo(
+    () =>
+      relatedNovels.filter(
+        (novel) =>
+          novel.id !== novelId && !excludedNovelIds.has(novel.id),
+      ),
+    [excludedNovelIds, novelId, relatedNovels],
+  );
   const discoveryItems = useMemo(() => {
-    const relatedIds = new Set(relatedNovels.map((novel) => novel.id));
+    const relatedIds = new Set(relatedItems.map((novel) => novel.id));
     return discoveryNovels
-      .filter((novel) => novel.id !== novelId && !relatedIds.has(novel.id))
+      .filter(
+        (novel) =>
+          novel.id !== novelId &&
+          !relatedIds.has(novel.id) &&
+          !excludedNovelIds.has(novel.id),
+      )
       .slice(0, 12);
-  }, [discoveryNovels, novelId, relatedNovels]);
+  }, [discoveryNovels, excludedNovelIds, novelId, relatedItems]);
   const fontSize = FONT_SIZE_VALUES[settings.fontSize];
   const lineHeight = Math.round(
     fontSize * LINE_HEIGHT_RATIOS[settings.lineSpacing],
@@ -347,6 +400,26 @@ export default function NovelReaderScreen() {
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+
+    async function loadRecommendationExclusions() {
+      try {
+        const ids = await listExcludedRecommendationIds();
+        if (isMounted) {
+          setExcludedNovelIds(ids);
+        }
+      } catch {
+        // 除外設定が読めなくても、おすすめ本体は表示できるようにする。
+      }
+    }
+
+    void loadRecommendationExclusions();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     void SystemUI.setBackgroundColorAsync(palette.background).catch(() => {});
 
     return () => {
@@ -367,14 +440,19 @@ export default function NovelReaderScreen() {
       try {
         const [offlineRecord, history] = await Promise.all([
           getOfflineNovel(novelId),
-          shouldResume ? getReadingHistory(novelId) : Promise.resolve(null),
+          shouldResume && directScrollOffset === null
+            ? getReadingHistory(novelId)
+            : Promise.resolve(null),
         ]);
 
         if (!isMounted) {
           return;
         }
 
-        if (history && shouldResume && !history.isFinished) {
+        if (directScrollOffset !== null) {
+          resumeOffsetRef.current = directScrollOffset;
+          currentScrollOffsetRef.current = directScrollOffset;
+        } else if (history && shouldResume && !history.isFinished) {
           resumeOffsetRef.current = history.scrollOffset;
           currentProgressRef.current = history.progress;
           currentScrollOffsetRef.current = history.scrollOffset;
@@ -416,7 +494,13 @@ export default function NovelReaderScreen() {
     return () => {
       isMounted = false;
     };
-  }, [applyBookmarkState, isValidNovelId, novelId, shouldResume]);
+  }, [
+    applyBookmarkState,
+    directScrollOffset,
+    isValidNovelId,
+    novelId,
+    shouldResume,
+  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -898,6 +982,30 @@ export default function NovelReaderScreen() {
     });
   }
 
+  async function hideRecommendation(novel: PixivNovelItem) {
+    try {
+      await excludeRecommendation(novel);
+      setExcludedNovelIds((current) => {
+        const next = new Set(current);
+        next.add(novel.id);
+        return next;
+      });
+      showStatus('この作品をおすすめから非表示にしたよ');
+    } catch (error) {
+      showStatus(`おすすめ設定を変更できなかった: ${toErrorMessage(error)}`);
+    }
+  }
+
+  function jumpToReaderMark(mark: ReaderMark) {
+    setIsMarksVisible(false);
+    currentScrollOffsetRef.current = mark.scrollOffset;
+    currentProgressRef.current = mark.progress;
+    setScrollProgress(mark.progress);
+    requestAnimationFrame(() => {
+      scrollViewRef.current?.scrollTo({ animated: true, y: mark.scrollOffset });
+    });
+  }
+
   function restoreReadingPosition() {
     if (
       hasRestoredPositionRef.current ||
@@ -1102,7 +1210,11 @@ export default function NovelReaderScreen() {
             eyebrow="FOR YOU"
             isLoading={isRelatedLoading}
             loadingText="似ている作品を探してる…"
-            novels={relatedNovels}
+            currentNovel={detail}
+            novels={relatedItems}
+            onExclude={(relatedNovel) => {
+              void hideRecommendation(relatedNovel);
+            }}
             onNovelPress={(relatedNovel) => {
               router.push({
                 pathname: '/novel/[id]',
@@ -1117,6 +1229,7 @@ export default function NovelReaderScreen() {
               setRelatedAttempt((current) => current + 1);
             }}
             palette={palette}
+            source="related"
             styles={styles}
             title="こちらもおすすめ"
           />
@@ -1127,7 +1240,11 @@ export default function NovelReaderScreen() {
             eyebrow="DISCOVERY"
             isLoading={isDiscoveryLoading}
             loadingText="ディスカバリーを準備してる…"
+            currentNovel={detail}
             novels={discoveryItems}
+            onExclude={(discoveryNovel) => {
+              void hideRecommendation(discoveryNovel);
+            }}
             onNovelPress={(discoveryNovel) => {
               router.push({
                 pathname: '/novel/[id]',
@@ -1142,6 +1259,7 @@ export default function NovelReaderScreen() {
               setDiscoveryAttempt((current) => current + 1);
             }}
             palette={palette}
+            source="discovery"
             styles={styles}
             title="ディスカバリー"
           />
@@ -1211,6 +1329,56 @@ export default function NovelReaderScreen() {
         visible={isSeriesVisible}
       />
 
+      <BookshelfPickerModal
+        accent={palette.accent}
+        background={palette.toolbar}
+        border={palette.border}
+        detail={detail}
+        muted={palette.muted}
+        onClose={() => setIsBookshelfVisible(false)}
+        onStatus={showStatus}
+        overlay={palette.overlay}
+        text={palette.text}
+        visible={isBookshelfVisible}
+      />
+
+      <ReaderMarksModal
+        accent={palette.accent}
+        background={palette.toolbar}
+        border={palette.border}
+        currentBlockIndex={currentMarkBlockIndex}
+        currentExcerpt={currentMarkExcerpt}
+        currentProgress={currentProgressRef.current}
+        currentScrollOffset={currentScrollOffsetRef.current}
+        detail={detail}
+        muted={palette.muted}
+        onClose={() => setIsMarksVisible(false)}
+        onJump={jumpToReaderMark}
+        onStatus={showStatus}
+        overlay={palette.overlay}
+        text={palette.text}
+        visible={isMarksVisible}
+      />
+
+      <RecommendationExclusionsModal
+        accent={palette.accent}
+        background={palette.toolbar}
+        border={palette.border}
+        muted={palette.muted}
+        onClose={() => setIsExclusionsVisible(false)}
+        onRestored={(restoredNovelId) => {
+          setExcludedNovelIds((current) => {
+            const next = new Set(current);
+            next.delete(restoredNovelId);
+            return next;
+          });
+          showStatus('おすすめへ戻したよ');
+        }}
+        overlay={palette.overlay}
+        text={palette.text}
+        visible={isExclusionsVisible}
+      />
+
       <ReaderSettingsModal
         onChange={updateSettings}
         onClose={() => {
@@ -1230,6 +1398,7 @@ export default function NovelReaderScreen() {
       ) : null}
 
       <MoreActionsModal
+        canOrganize={detail !== null}
         isOfflineLoading={isOfflineLoading}
         isOfflineSaved={isOfflineSaved}
         onClose={() => {
@@ -1245,6 +1414,18 @@ export default function NovelReaderScreen() {
         onOpenSeries={() => {
           setIsMoreVisible(false);
           requestAnimationFrame(() => setIsSeriesVisible(true));
+        }}
+        onOpenBookshelf={() => {
+          setIsMoreVisible(false);
+          requestAnimationFrame(() => setIsBookshelfVisible(true));
+        }}
+        onOpenMarks={() => {
+          setIsMoreVisible(false);
+          requestAnimationFrame(() => setIsMarksVisible(true));
+        }}
+        onOpenExclusions={() => {
+          setIsMoreVisible(false);
+          requestAnimationFrame(() => setIsExclusionsVisible(true));
         }}
         onOpenDetail={() => {
           setIsMoreVisible(false);
@@ -1427,29 +1608,35 @@ function SeriesNavigationSection({
 }
 
 interface RecommendationSectionProps {
+  currentNovel: PixivNovelItem | null;
   emptyText: string;
   error: string | null;
   eyebrow: string;
   isLoading: boolean;
   loadingText: string;
   novels: PixivNovelItem[];
+  onExclude: (novel: PixivNovelItem) => void;
   onNovelPress: (novel: PixivNovelItem) => void;
   onRetry: () => void;
   palette: ReaderPalette;
+  source: RecommendationSource;
   styles: ReturnType<typeof createStyles>;
   title: string;
 }
 
 function RecommendationSection({
+  currentNovel,
   emptyText,
   error,
   eyebrow,
   isLoading,
   loadingText,
   novels,
+  onExclude,
   onNovelPress,
   onRetry,
   palette,
+  source,
   styles,
   title,
 }: RecommendationSectionProps) {
@@ -1536,6 +1723,23 @@ function RecommendationSection({
                     ♡ {novel.totalBookmarks.toLocaleString()}
                   </Text>
                 </View>
+                <Text numberOfLines={1} style={styles.recommendationReason}>
+                  {getRecommendationReason(currentNovel, novel, source)}
+                </Text>
+                <Pressable
+                  accessibilityLabel={`${novel.title}をおすすめから外す`}
+                  accessibilityRole="button"
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    onExclude(novel);
+                  }}
+                  style={({ pressed }) => [
+                    styles.notInterestedButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.notInterestedText}>興味なし</Text>
+                </Pressable>
                 <View style={styles.relatedReadRow}>
                   <Text style={styles.relatedReadText}>読む</Text>
                   <Text style={styles.relatedArrow}>›</Text>
@@ -1899,12 +2103,16 @@ function RadioOption({ active, label, onPress, palette }: RadioOptionProps) {
 }
 
 interface MoreActionsModalProps {
+  canOrganize: boolean;
   hasSeries: boolean;
   isOfflineLoading: boolean;
   isOfflineSaved: boolean;
   offlineImageProgress: string | null;
   onClose: () => void;
+  onOpenBookshelf: () => void;
   onOpenDetail: () => void;
+  onOpenExclusions: () => void;
+  onOpenMarks: () => void;
   onOpenNavigator: () => void;
   onOpenPixiv: () => void;
   onOpenSeries: () => void;
@@ -1918,12 +2126,16 @@ interface MoreActionsModalProps {
 }
 
 function MoreActionsModal({
+  canOrganize,
   hasSeries,
   isOfflineLoading,
   isOfflineSaved,
   offlineImageProgress,
   onClose,
+  onOpenBookshelf,
   onOpenDetail,
+  onOpenExclusions,
+  onOpenMarks,
   onOpenNavigator,
   onOpenPixiv,
   onOpenSeries,
@@ -1953,8 +2165,13 @@ function MoreActionsModal({
               読書位置 {Math.round(progress * 100)}%
             </Text>
           </View>
-          <SheetAction
-            label="Aa  表示設定"
+          <ScrollView
+            contentContainerStyle={styles.actionListContent}
+            showsVerticalScrollIndicator={false}
+            style={styles.actionList}
+          >
+            <SheetAction
+              label="Aa  表示設定"
             onPress={onOpenSettings}
             palette={palette}
           />
@@ -1973,6 +2190,23 @@ function MoreActionsModal({
           <SheetAction
             label="作品詳細を開く"
             onPress={onOpenDetail}
+            palette={palette}
+          />
+          <SheetAction
+            disabled={!canOrganize}
+            label="本棚に追加"
+            onPress={onOpenBookshelf}
+            palette={palette}
+          />
+          <SheetAction
+            disabled={!canOrganize}
+            label="しおり・メモ"
+            onPress={onOpenMarks}
+            palette={palette}
+          />
+          <SheetAction
+            label="おすすめ除外を管理"
+            onPress={onOpenExclusions}
             palette={palette}
           />
           <SheetAction
@@ -1996,11 +2230,12 @@ function MoreActionsModal({
             onPress={onReload}
             palette={palette}
           />
-          <SheetAction
-            label="読書画面を閉じる"
-            onPress={onReturn}
-            palette={palette}
-          />
+            <SheetAction
+              label="読書画面を閉じる"
+              onPress={onReturn}
+              palette={palette}
+            />
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -2477,6 +2712,25 @@ function createStyles(palette: ReaderPalette) {
       color: palette.muted,
       fontSize: 10,
     },
+    recommendationReason: {
+      color: palette.accent,
+      fontSize: 10,
+      fontWeight: '800',
+    },
+    notInterestedButton: {
+      alignSelf: 'flex-start',
+      minHeight: 28,
+      justifyContent: 'center',
+      paddingHorizontal: 9,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.border,
+      borderRadius: 14,
+    },
+    notInterestedText: {
+      color: palette.muted,
+      fontSize: 9,
+      fontWeight: '700',
+    },
     relatedReadRow: {
       flex: 1,
       flexDirection: 'row',
@@ -2550,6 +2804,7 @@ function createSheetStyles(palette: ReaderPalette) {
     actionSheet: {
       width: '100%',
       maxWidth: 620,
+      maxHeight: '92%',
       alignSelf: 'center',
       paddingHorizontal: 20,
       paddingTop: 10,
@@ -2584,6 +2839,12 @@ function createSheetStyles(palette: ReaderPalette) {
       color: palette.muted,
       fontSize: 12,
       fontWeight: '700',
+    },
+    actionList: {
+      flexShrink: 1,
+    },
+    actionListContent: {
+      paddingBottom: 4,
     },
     closeButton: {
       width: 38,

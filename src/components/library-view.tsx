@@ -5,10 +5,13 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 
@@ -18,39 +21,119 @@ import {
   listOfflineNovels,
   listReadingHistory,
   type LibraryNovel,
+  type ReadingHistoryFilter,
+  type ReadingHistorySort,
 } from '@/lib/library-db';
+import {
+  createBookshelf,
+  deleteBookshelf,
+  deleteReaderMark,
+  listBookshelfNovels,
+  listBookshelves,
+  listReaderMarks,
+  removeNovelFromBookshelf,
+  renameBookshelf,
+  type Bookshelf,
+  type ReaderMark,
+} from '@/lib/organizer-db';
 import { type AppColors, useAppTheme } from '@/theme';
 
-type LibraryMode = 'history' | 'offline';
+type LibraryMode = 'history' | 'shelves' | 'marks' | 'offline';
+type ShelfEditorMode = 'create' | 'rename';
 
 interface LibraryViewProps {
-  onOpenNovel: (novelId: number, resume: boolean) => void;
+  onOpenNovel: (
+    novelId: number,
+    resume: boolean,
+    scrollOffset?: number,
+  ) => void;
 }
+
+const HISTORY_FILTERS: { value: ReadingHistoryFilter; label: string }[] = [
+  { value: 'all', label: 'すべて' },
+  { value: 'reading', label: '読みかけ' },
+  { value: 'finished', label: '読了' },
+  { value: 'offline', label: '保存済み' },
+];
+
+const HISTORY_SORTS: { value: ReadingHistorySort; label: string }[] = [
+  { value: 'recent', label: '最近読んだ順' },
+  { value: 'progress', label: '進捗順' },
+  { value: 'title', label: '作品名順' },
+];
 
 export function LibraryView({ onOpenNovel }: LibraryViewProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [mode, setMode] = useState<LibraryMode>('history');
   const [items, setItems] = useState<LibraryNovel[]>([]);
+  const [marks, setMarks] = useState<ReaderMark[]>([]);
+  const [shelves, setShelves] = useState<Bookshelf[]>([]);
+  const [selectedShelfId, setSelectedShelfId] = useState<number | null>(null);
+  const [historyQuery, setHistoryQuery] = useState('');
+  const [historyFilter, setHistoryFilter] =
+    useState<ReadingHistoryFilter>('all');
+  const [historySort, setHistorySort] =
+    useState<ReadingHistorySort>('recent');
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isShelfEditorVisible, setIsShelfEditorVisible] = useState(false);
+  const [shelfEditorMode, setShelfEditorMode] =
+    useState<ShelfEditorMode>('create');
+  const [shelfName, setShelfName] = useState('');
+  const [isShelfSaving, setIsShelfSaving] = useState(false);
+
+  const selectedShelf = shelves.find((shelf) => shelf.id === selectedShelfId);
 
   const loadItems = useCallback(async () => {
     setIsLoading(true);
     setErrorMessage(null);
 
     try {
-      const nextItems =
-        mode === 'history'
-          ? await listReadingHistory()
-          : await listOfflineNovels();
-      setItems(nextItems);
+      if (mode === 'history') {
+        setItems(
+          await listReadingHistory({
+            filter: historyFilter,
+            query: historyQuery,
+            sort: historySort,
+          }),
+        );
+        setMarks([]);
+        return;
+      }
+
+      if (mode === 'offline') {
+        setItems(await listOfflineNovels(300));
+        setMarks([]);
+        return;
+      }
+
+      if (mode === 'marks') {
+        setMarks(await listReaderMarks());
+        setItems([]);
+        return;
+      }
+
+      const nextShelves = await listBookshelves();
+      const nextSelectedShelfId =
+        selectedShelfId &&
+        nextShelves.some((shelf) => shelf.id === selectedShelfId)
+          ? selectedShelfId
+          : (nextShelves[0]?.id ?? null);
+      setShelves(nextShelves);
+      setSelectedShelfId(nextSelectedShelfId);
+      setMarks([]);
+      setItems(
+        nextSelectedShelfId
+          ? await listBookshelfNovels(nextSelectedShelfId)
+          : [],
+      );
     } catch (error) {
       setErrorMessage(toErrorMessage(error));
     } finally {
       setIsLoading(false);
     }
-  }, [mode]);
+  }, [historyFilter, historyQuery, historySort, mode, selectedShelfId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -63,10 +146,23 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
     await loadItems();
   }
 
+  async function removeFromShelf(novelId: number) {
+    if (!selectedShelfId) {
+      return;
+    }
+    await removeNovelFromBookshelf(selectedShelfId, novelId);
+    await loadItems();
+  }
+
+  async function removeMark(markId: number) {
+    await deleteReaderMark(markId);
+    await loadItems();
+  }
+
   function confirmClearHistory() {
     Alert.alert(
       '読書履歴を消す？',
-      'オフライン保存した本文は消さないよ。',
+      '本棚・しおり・オフライン保存は消さないよ。',
       [
         { text: 'キャンセル', style: 'cancel' },
         {
@@ -80,96 +176,391 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
     );
   }
 
+  function openShelfEditor(editorMode: ShelfEditorMode) {
+    setShelfEditorMode(editorMode);
+    setShelfName(editorMode === 'rename' ? (selectedShelf?.name ?? '') : '');
+    setIsShelfEditorVisible(true);
+  }
+
+  async function saveShelf() {
+    if (shelfName.trim().length === 0 || isShelfSaving) {
+      return;
+    }
+    setIsShelfSaving(true);
+    setErrorMessage(null);
+    try {
+      if (shelfEditorMode === 'rename' && selectedShelfId) {
+        await renameBookshelf(selectedShelfId, shelfName);
+        setIsShelfEditorVisible(false);
+        setShelfName('');
+        await loadItems();
+        return;
+      }
+
+      const created = await createBookshelf(shelfName);
+      const nextShelves = await listBookshelves();
+      setShelves(nextShelves);
+      setSelectedShelfId(created.id);
+      setItems(await listBookshelfNovels(created.id));
+      setMarks([]);
+      setIsShelfEditorVisible(false);
+      setShelfName('');
+    } catch (error) {
+      setErrorMessage(toErrorMessage(error));
+    } finally {
+      setIsShelfSaving(false);
+    }
+  }
+
+  function confirmDeleteShelf() {
+    if (!selectedShelf) {
+      return;
+    }
+    Alert.alert(
+      `「${selectedShelf.name}」を削除する？`,
+      '作品の履歴やオフライン保存は消えないよ。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '本棚を削除',
+          style: 'destructive',
+          onPress: () => {
+            void deleteBookshelf(selectedShelf.id).then(async () => {
+              setSelectedShelfId(null);
+              await loadItems();
+            });
+          },
+        },
+      ],
+    );
+  }
+
+  const emptyMessage = getEmptyMessage(mode, errorMessage, selectedShelf?.name);
+
   return (
     <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <View style={styles.segmentedControl}>
-          <LibraryModeButton
-            active={mode === 'history'}
-            label="履歴"
-            onPress={() => {
-              setMode('history');
-            }}
-          />
-          <LibraryModeButton
-            active={mode === 'offline'}
-            label="オフライン"
-            onPress={() => {
-              setMode('offline');
-            }}
-          />
-        </View>
+      <ScrollView
+        contentContainerStyle={styles.modeTabs}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+      >
+        <LibraryModeButton
+          active={mode === 'history'}
+          label="履歴"
+          onPress={() => setMode('history')}
+        />
+        <LibraryModeButton
+          active={mode === 'shelves'}
+          label="本棚"
+          onPress={() => setMode('shelves')}
+        />
+        <LibraryModeButton
+          active={mode === 'marks'}
+          label="しおり"
+          onPress={() => setMode('marks')}
+        />
+        <LibraryModeButton
+          active={mode === 'offline'}
+          label="オフライン"
+          onPress={() => setMode('offline')}
+        />
+      </ScrollView>
 
-        {mode === 'history' && items.length > 0 ? (
-          <Pressable
-            accessibilityRole="button"
-            onPress={confirmClearHistory}
-            style={({ pressed }) => [
-              styles.clearButton,
-              pressed && styles.pressed,
-            ]}
+      {mode === 'history' ? (
+        <HistoryControls
+          filter={historyFilter}
+          onClear={items.length > 0 ? confirmClearHistory : undefined}
+          onFilterChange={setHistoryFilter}
+          onQueryChange={setHistoryQuery}
+          onSortChange={setHistorySort}
+          query={historyQuery}
+          sort={historySort}
+        />
+      ) : null}
+
+      {mode === 'shelves' ? (
+        <View style={styles.shelfControls}>
+          <ScrollView
+            contentContainerStyle={styles.shelfTabs}
+            horizontal
+            showsHorizontalScrollIndicator={false}
           >
-            <Text style={styles.clearButtonText}>履歴を消す</Text>
+            {shelves.map((shelf) => (
+              <Pressable
+                accessibilityRole="tab"
+                accessibilityState={{ selected: selectedShelfId === shelf.id }}
+                key={shelf.id}
+                onPress={() => setSelectedShelfId(shelf.id)}
+                style={({ pressed }) => [
+                  styles.shelfChip,
+                  selectedShelfId === shelf.id && styles.shelfChipActive,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.shelfChipText,
+                    selectedShelfId === shelf.id && styles.shelfChipTextActive,
+                  ]}
+                >
+                  {shelf.name} · {shelf.itemCount}
+                </Text>
+              </Pressable>
+            ))}
+            <Pressable
+              accessibilityLabel="本棚を作成"
+              accessibilityRole="button"
+              onPress={() => openShelfEditor('create')}
+              style={({ pressed }) => [
+                styles.addShelfButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.addShelfText}>＋ 新規</Text>
+            </Pressable>
+          </ScrollView>
+          {selectedShelf ? (
+            <View style={styles.shelfActions}>
+              <Text numberOfLines={1} style={styles.selectedShelfTitle}>
+                {selectedShelf.name}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => openShelfEditor('rename')}
+              >
+                <Text style={styles.shelfActionText}>名前変更</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" onPress={confirmDeleteShelf}>
+                <Text style={styles.shelfDeleteText}>削除</Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {mode === 'marks' ? (
+        <FlatList
+          contentContainerStyle={styles.listContent}
+          data={marks}
+          keyExtractor={(mark) => `mark-${mark.id}`}
+          ListEmptyComponent={
+            <LibraryEmptyState
+              colors={colors}
+              isLoading={isLoading}
+              message={emptyMessage}
+              styles={styles}
+            />
+          }
+          refreshControl={
+            <RefreshControl
+              colors={[colors.accent]}
+              onRefresh={() => void loadItems()}
+              refreshing={isLoading && marks.length > 0}
+              tintColor={colors.accent}
+            />
+          }
+          renderItem={({ item: mark }) => (
+            <ReaderMarkCard
+              mark={mark}
+              onDelete={() => void removeMark(mark.id)}
+              onOpen={() =>
+                onOpenNovel(mark.novelId, false, mark.scrollOffset)
+              }
+            />
+          )}
+        />
+      ) : (
+        <FlatList
+          contentContainerStyle={styles.listContent}
+          data={items}
+          keyExtractor={(item) => `novel-${item.novelId}`}
+          ListEmptyComponent={
+            <LibraryEmptyState
+              colors={colors}
+              isLoading={isLoading}
+              message={emptyMessage}
+              styles={styles}
+            />
+          }
+          refreshControl={
+            <RefreshControl
+              colors={[colors.accent]}
+              onRefresh={() => void loadItems()}
+              refreshing={isLoading && items.length > 0}
+              tintColor={colors.accent}
+            />
+          }
+          renderItem={({ item }) => (
+            <LibraryNovelCard
+              item={item}
+              mode={mode}
+              onOpen={() => {
+                onOpenNovel(
+                  item.novelId,
+                  mode === 'history' && !item.isFinished,
+                );
+              }}
+              onRemove={
+                mode === 'offline'
+                  ? () => void removeOffline(item.novelId)
+                  : mode === 'shelves'
+                    ? () => void removeFromShelf(item.novelId)
+                    : undefined
+              }
+            />
+          )}
+        />
+      )}
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsShelfEditorVisible(false)}
+        transparent
+        visible={isShelfEditorVisible}
+      >
+        <Pressable
+          onPress={() => setIsShelfEditorVisible(false)}
+          style={styles.modalBackdrop}
+        >
+          <Pressable onPress={() => {}} style={styles.editorModal}>
+            <Text style={styles.editorTitle}>
+              {shelfEditorMode === 'create' ? '新しい本棚' : '本棚の名前変更'}
+            </Text>
+            <TextInput
+              autoFocus
+              maxLength={40}
+              onChangeText={setShelfName}
+              onSubmitEditing={() => void saveShelf()}
+              placeholder="本棚の名前"
+              placeholderTextColor={colors.placeholder}
+              returnKeyType="done"
+              style={styles.editorInput}
+              value={shelfName}
+            />
+            <View style={styles.editorButtons}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setIsShelfEditorVisible(false)}
+                style={({ pressed }) => [
+                  styles.cancelButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.cancelText}>キャンセル</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={shelfName.trim().length === 0 || isShelfSaving}
+                onPress={() => void saveShelf()}
+                style={({ pressed }) => [
+                  styles.saveButton,
+                  (shelfName.trim().length === 0 || isShelfSaving) &&
+                    styles.disabled,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.saveText}>保存</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+function LibraryEmptyState({
+  colors,
+  isLoading,
+  message,
+  styles,
+}: {
+  colors: AppColors;
+  isLoading: boolean;
+  message: { icon: string; title: string; description: string };
+  styles: ReturnType<typeof createStyles>;
+}) {
+  return (
+    <View style={styles.emptyState}>
+      {isLoading ? (
+        <ActivityIndicator color={colors.accent} size="large" />
+      ) : (
+        <>
+          <Text style={styles.emptyIcon}>{message.icon}</Text>
+          <Text style={styles.emptyTitle}>{message.title}</Text>
+          <Text style={styles.emptyText}>{message.description}</Text>
+        </>
+      )}
+    </View>
+  );
+}
+
+function HistoryControls({
+  filter,
+  onClear,
+  onFilterChange,
+  onQueryChange,
+  onSortChange,
+  query,
+  sort,
+}: {
+  filter: ReadingHistoryFilter;
+  onClear?: () => void;
+  onFilterChange: (filter: ReadingHistoryFilter) => void;
+  onQueryChange: (query: string) => void;
+  onSortChange: (sort: ReadingHistorySort) => void;
+  query: string;
+  sort: ReadingHistorySort;
+}) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  return (
+    <View style={styles.historyControls}>
+      <View style={styles.searchRow}>
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={onQueryChange}
+          placeholder="作品名・作者名で履歴を検索"
+          placeholderTextColor={colors.placeholder}
+          returnKeyType="search"
+          style={styles.searchInput}
+          value={query}
+        />
+        {onClear ? (
+          <Pressable accessibilityRole="button" onPress={onClear}>
+            <Text style={styles.clearButtonText}>履歴削除</Text>
           </Pressable>
         ) : null}
       </View>
-
-      <FlatList
-        contentContainerStyle={styles.listContent}
-        data={items}
-        keyExtractor={(item) => String(item.novelId)}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            {isLoading ? (
-              <ActivityIndicator color={colors.accent} size="large" />
-            ) : (
-              <>
-                <Text style={styles.emptyIcon}>
-                  {mode === 'history' ? '🕘' : '⇩'}
-                </Text>
-                <Text style={styles.emptyTitle}>
-                  {errorMessage
-                    ? 'ライブラリを開けなかった'
-                    : mode === 'history'
-                      ? 'まだ読書履歴がないよ'
-                      : 'オフライン作品はまだないよ'}
-                </Text>
-                <Text style={styles.emptyText}>
-                  {errorMessage ??
-                    (mode === 'history'
-                      ? '小説を読むと、続きから開けるようになる。'
-                      : '読書画面の「…」から本文を保存できる。')}
-                </Text>
-              </>
-            )}
-          </View>
-        }
-        refreshControl={
-          <RefreshControl
-            colors={[colors.accent]}
-            onRefresh={() => {
-              void loadItems();
-            }}
-            refreshing={isLoading && items.length > 0}
-            tintColor={colors.accent}
+      <ScrollView
+        contentContainerStyle={styles.filterRow}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+      >
+        {HISTORY_FILTERS.map((option) => (
+          <FilterChip
+            active={filter === option.value}
+            key={option.value}
+            label={option.label}
+            onPress={() => onFilterChange(option.value)}
           />
-        }
-        renderItem={({ item }) => (
-          <LibraryNovelCard
-            item={item}
-            mode={mode}
-            onOpen={() => {
-              onOpenNovel(
-                item.novelId,
-                mode === 'history' && !item.isFinished,
-              );
-            }}
-            onRemoveOffline={() => {
-              void removeOffline(item.novelId);
-            }}
+        ))}
+      </ScrollView>
+      <ScrollView
+        contentContainerStyle={styles.filterRow}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+      >
+        {HISTORY_SORTS.map((option) => (
+          <FilterChip
+            active={sort === option.value}
+            key={option.value}
+            label={option.label}
+            onPress={() => onSortChange(option.value)}
           />
-        )}
-      />
+        ))}
+      </ScrollView>
     </View>
   );
 }
@@ -185,7 +576,6 @@ function LibraryModeButton({
 }) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-
   return (
     <Pressable
       accessibilityRole="tab"
@@ -204,30 +594,57 @@ function LibraryModeButton({
   );
 }
 
+function FilterChip({
+  active,
+  label,
+  onPress,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.filterChip,
+        active && styles.filterChipActive,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text
+        style={[styles.filterChipText, active && styles.filterChipTextActive]}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 function LibraryNovelCard({
   item,
   mode,
   onOpen,
-  onRemoveOffline,
+  onRemove,
 }: {
   item: LibraryNovel;
   mode: LibraryMode;
   onOpen: () => void;
-  onRemoveOffline: () => void;
+  onRemove?: () => void;
 }) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const progressPercent = Math.round(item.progress * 100);
-
   return (
     <View style={styles.card}>
       <Pressable
         accessibilityRole="button"
         onPress={onOpen}
-        style={({ pressed }) => [
-          styles.cardMain,
-          pressed && styles.pressed,
-        ]}
+        style={({ pressed }) => [styles.cardMain, pressed && styles.pressed]}
       >
         {item.coverUrl ? (
           <Image
@@ -244,7 +661,6 @@ function LibraryNovelCard({
             <Text style={styles.coverPlaceholderText}>📖</Text>
           </View>
         )}
-
         <View style={styles.cardBody}>
           <View style={styles.cardTitleRow}>
             <Text numberOfLines={2} style={styles.cardTitle}>
@@ -256,14 +672,10 @@ function LibraryNovelCard({
               </View>
             ) : null}
           </View>
-          <Text numberOfLines={1} style={styles.author}>
-            {item.authorName}
-          </Text>
+          <Text numberOfLines={1} style={styles.author}>{item.authorName}</Text>
           <Text style={styles.meta}>
-            {item.textLength.toLocaleString()}字 ・{' '}
-            {formatRelativeTime(item.lastReadAt)}
+            {item.textLength.toLocaleString()}字 ・ {formatRelativeTime(item.lastReadAt)}
           </Text>
-
           <View style={styles.progressRow}>
             <View style={styles.progressTrack}>
               <View
@@ -277,250 +689,194 @@ function LibraryNovelCard({
               {item.isFinished ? '読了' : `${progressPercent}%`}
             </Text>
           </View>
-
           <Text style={styles.openLabel}>
             {mode === 'history' && !item.isFinished
               ? '続きから読む  ›'
-              : '最初から読む  ›'}
+              : '読む  ›'}
           </Text>
         </View>
       </Pressable>
-
-      {mode === 'offline' ? (
+      {onRemove ? (
         <Pressable
           accessibilityRole="button"
-          onPress={onRemoveOffline}
+          onPress={onRemove}
           style={({ pressed }) => [
             styles.removeButton,
             pressed && styles.pressed,
           ]}
         >
-          <Text style={styles.removeButtonText}>保存を削除</Text>
+          <Text style={styles.removeButtonText}>
+            {mode === 'offline' ? '保存を削除' : '本棚から外す'}
+          </Text>
         </Pressable>
       ) : null}
     </View>
   );
 }
 
+function ReaderMarkCard({
+  mark,
+  onDelete,
+  onOpen,
+}: {
+  mark: ReaderMark;
+  onDelete: () => void;
+  onOpen: () => void;
+}) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  return (
+    <View style={styles.markCard}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onOpen}
+        style={({ pressed }) => [styles.markMain, pressed && styles.pressed]}
+      >
+        <View style={styles.markHeading}>
+          <Text style={styles.markProgress}>{Math.round(mark.progress * 100)}%</Text>
+          <Text style={styles.meta}>{formatRelativeTime(mark.updatedAt)}</Text>
+        </View>
+        <Text numberOfLines={1} style={styles.cardTitle}>{mark.title}</Text>
+        <Text numberOfLines={1} style={styles.author}>{mark.authorName}</Text>
+        <Text numberOfLines={3} style={styles.markExcerpt}>{mark.excerpt}</Text>
+        {mark.note ? (
+          <Text numberOfLines={3} style={styles.markNote}>📝 {mark.note}</Text>
+        ) : null}
+        <Text style={styles.openLabel}>しおり位置から読む  ›</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onDelete}
+        style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
+      >
+        <Text style={styles.removeButtonText}>しおりを削除</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function getEmptyMessage(
+  mode: LibraryMode,
+  error: string | null,
+  shelfName?: string,
+) {
+  if (error) {
+    return { icon: '⚠', title: 'ライブラリを開けなかった', description: error };
+  }
+  if (mode === 'history') {
+    return {
+      icon: '🕘',
+      title: '条件に合う履歴がないよ',
+      description: '小説を読むと、ここから続きへ戻れる。',
+    };
+  }
+  if (mode === 'offline') {
+    return {
+      icon: '⇩',
+      title: 'オフライン作品はまだないよ',
+      description: '読書画面の「…」から本文と挿絵を保存できる。',
+    };
+  }
+  if (mode === 'marks') {
+    return {
+      icon: '🔖',
+      title: 'しおり・メモはまだないよ',
+      description: '読書画面の「…」から現在位置を保存できる。',
+    };
+  }
+  return {
+    icon: '📚',
+    title: `「${shelfName ?? '本棚'}」は空だよ`,
+    description: '読書画面の「…」から好きな本棚へ追加できる。',
+  };
+}
+
 function formatRelativeTime(timestamp: number): string {
   const elapsed = Math.max(0, Date.now() - timestamp);
   const minutes = Math.floor(elapsed / 60_000);
-
-  if (minutes < 1) {
-    return 'たった今';
-  }
-
-  if (minutes < 60) {
-    return `${minutes}分前`;
-  }
-
+  if (minutes < 1) return 'たった今';
+  if (minutes < 60) return `${minutes}分前`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return `${hours}時間前`;
-  }
-
+  if (hours < 24) return `${hours}時間前`;
   const days = Math.floor(hours / 24);
-  if (days < 30) {
-    return `${days}日前`;
-  }
-
+  if (days < 30) return `${days}日前`;
   return new Date(timestamp).toLocaleDateString('ja-JP');
 }
 
 function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('UNIQUE') ? '同じ名前の本棚があるよ' : message;
 }
 
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
-    container: {
-      flex: 1,
-    },
-    headerRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      paddingHorizontal: 16,
-      paddingTop: 14,
-      paddingBottom: 8,
-    },
-    segmentedControl: {
-      flex: 1,
-      flexDirection: 'row',
-      padding: 4,
-      borderRadius: 14,
-      backgroundColor: colors.surfaceAlt,
-    },
-    modeButton: {
-      flex: 1,
-      minHeight: 38,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderRadius: 11,
-    },
-    modeButtonActive: {
-      backgroundColor: colors.surface,
-      shadowColor: colors.shadow,
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.16,
-      shadowRadius: 6,
-      elevation: 2,
-    },
-    modeText: {
-      color: colors.textMuted,
-      fontSize: 13,
-      fontWeight: '700',
-    },
-    modeTextActive: {
-      color: colors.text,
-    },
-    clearButton: {
-      minHeight: 38,
-      justifyContent: 'center',
-      paddingHorizontal: 5,
-    },
-    clearButtonText: {
-      color: colors.danger,
-      fontSize: 12,
-      fontWeight: '700',
-    },
-    listContent: {
-      padding: 16,
-      paddingBottom: 110,
-      gap: 12,
-      flexGrow: 1,
-    },
-    card: {
-      overflow: 'hidden',
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      borderRadius: 18,
-      backgroundColor: colors.surface,
-    },
-    cardMain: {
-      flexDirection: 'row',
-      gap: 13,
-      padding: 12,
-    },
-    cover: {
-      width: 82,
-      height: 110,
-      borderRadius: 11,
-      backgroundColor: colors.surfaceAlt,
-    },
-    coverPlaceholder: {
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    coverPlaceholderText: {
-      fontSize: 28,
-    },
-    cardBody: {
-      flex: 1,
-      gap: 5,
-    },
-    cardTitleRow: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: 7,
-    },
-    cardTitle: {
-      flex: 1,
-      color: colors.text,
-      fontSize: 15,
-      fontWeight: '800',
-      lineHeight: 21,
-    },
-    offlineBadge: {
-      paddingHorizontal: 6,
-      paddingVertical: 3,
-      borderRadius: 6,
-      backgroundColor: colors.accentSoft,
-    },
-    offlineBadgeText: {
-      color: colors.accentStrong,
-      fontSize: 8,
-      fontWeight: '900',
-      letterSpacing: 0.5,
-    },
-    author: {
-      color: colors.textSecondary,
-      fontSize: 12,
-      fontWeight: '600',
-    },
-    meta: {
-      color: colors.textMuted,
-      fontSize: 10,
-    },
-    progressRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 9,
-      marginTop: 3,
-    },
-    progressTrack: {
-      flex: 1,
-      height: 5,
-      overflow: 'hidden',
-      borderRadius: 999,
-      backgroundColor: colors.surfaceAlt,
-    },
-    progressValue: {
-      height: '100%',
-      borderRadius: 999,
-      backgroundColor: colors.accent,
-    },
-    progressText: {
-      minWidth: 34,
-      color: colors.textMuted,
-      fontSize: 10,
-      fontWeight: '800',
-      textAlign: 'right',
-    },
-    openLabel: {
-      marginTop: 3,
-      color: colors.accent,
-      fontSize: 11,
-      fontWeight: '800',
-      textAlign: 'right',
-    },
-    removeButton: {
-      minHeight: 42,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: colors.border,
-    },
-    removeButtonText: {
-      color: colors.danger,
-      fontSize: 12,
-      fontWeight: '700',
-    },
-    emptyState: {
-      flex: 1,
-      minHeight: 360,
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 9,
-      paddingHorizontal: 28,
-    },
-    emptyIcon: {
-      fontSize: 38,
-    },
-    emptyTitle: {
-      color: colors.text,
-      fontSize: 17,
-      fontWeight: '800',
-      textAlign: 'center',
-    },
-    emptyText: {
-      color: colors.textMuted,
-      fontSize: 12,
-      lineHeight: 19,
-      textAlign: 'center',
-    },
-    pressed: {
-      opacity: 0.7,
-    },
+    container: { flex: 1 },
+    modeTabs: { gap: 8, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 9 },
+    modeButton: { minWidth: 82, minHeight: 40, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, borderRadius: 13, backgroundColor: colors.surfaceAlt },
+    modeButtonActive: { backgroundColor: colors.accent },
+    modeText: { color: colors.textMuted, fontSize: 13, fontWeight: '800' },
+    modeTextActive: { color: colors.onAccent },
+    historyControls: { gap: 8, paddingHorizontal: 16, paddingBottom: 8 },
+    searchRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    searchInput: { flex: 1, minHeight: 44, paddingHorizontal: 13, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 13, color: colors.text, backgroundColor: colors.input, fontSize: 13 },
+    clearButtonText: { color: colors.danger, fontSize: 11, fontWeight: '800' },
+    filterRow: { gap: 7 },
+    filterChip: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 17, backgroundColor: colors.surface },
+    filterChipActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+    filterChipText: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
+    filterChipTextActive: { color: colors.accentStrong },
+    shelfControls: { gap: 7, paddingHorizontal: 16, paddingBottom: 8 },
+    shelfTabs: { gap: 7 },
+    shelfChip: { minHeight: 38, justifyContent: 'center', paddingHorizontal: 13, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 12, backgroundColor: colors.surface },
+    shelfChipActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+    shelfChipText: { color: colors.textMuted, fontSize: 11, fontWeight: '800' },
+    shelfChipTextActive: { color: colors.accentStrong },
+    addShelfButton: { minHeight: 38, justifyContent: 'center', paddingHorizontal: 13, borderRadius: 12, backgroundColor: colors.accent },
+    addShelfText: { color: colors.onAccent, fontSize: 11, fontWeight: '900' },
+    shelfActions: { minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 14 },
+    selectedShelfTitle: { flex: 1, color: colors.text, fontSize: 12, fontWeight: '800' },
+    shelfActionText: { color: colors.accent, fontSize: 11, fontWeight: '800' },
+    shelfDeleteText: { color: colors.danger, fontSize: 11, fontWeight: '800' },
+    listContent: { flexGrow: 1, gap: 12, padding: 16, paddingBottom: 110 },
+    card: { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 18, backgroundColor: colors.surface },
+    cardMain: { flexDirection: 'row', gap: 13, padding: 12 },
+    cover: { width: 82, height: 110, borderRadius: 11, backgroundColor: colors.surfaceAlt },
+    coverPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+    coverPlaceholderText: { fontSize: 28 },
+    cardBody: { flex: 1, gap: 5 },
+    cardTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 },
+    cardTitle: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '800', lineHeight: 21 },
+    offlineBadge: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: colors.accentSoft },
+    offlineBadgeText: { color: colors.accentStrong, fontSize: 8, fontWeight: '900', letterSpacing: 0.5 },
+    author: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
+    meta: { color: colors.textMuted, fontSize: 10 },
+    progressRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 3 },
+    progressTrack: { flex: 1, height: 5, overflow: 'hidden', borderRadius: 999, backgroundColor: colors.surfaceAlt },
+    progressValue: { height: '100%', borderRadius: 999, backgroundColor: colors.accent },
+    progressText: { minWidth: 34, color: colors.textMuted, fontSize: 10, fontWeight: '800', textAlign: 'right' },
+    openLabel: { marginTop: 3, color: colors.accent, fontSize: 11, fontWeight: '800', textAlign: 'right' },
+    removeButton: { minHeight: 42, alignItems: 'center', justifyContent: 'center', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+    removeButtonText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
+    markCard: { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 18, backgroundColor: colors.surface },
+    markMain: { gap: 6, padding: 14 },
+    markHeading: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
+    markProgress: { color: colors.accent, fontSize: 11, fontWeight: '900' },
+    markExcerpt: { color: colors.text, fontSize: 13, fontWeight: '700', lineHeight: 20 },
+    markNote: { color: colors.textSecondary, fontSize: 12, lineHeight: 18 },
+    emptyState: { flex: 1, minHeight: 340, alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 28 },
+    emptyIcon: { fontSize: 38 },
+    emptyTitle: { color: colors.text, fontSize: 17, fontWeight: '800', textAlign: 'center' },
+    emptyText: { color: colors.textMuted, fontSize: 12, lineHeight: 19, textAlign: 'center' },
+    modalBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.overlay },
+    editorModal: { width: '100%', maxWidth: 460, gap: 14, padding: 20, borderRadius: 18, backgroundColor: colors.surface },
+    editorTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
+    editorInput: { minHeight: 48, paddingHorizontal: 13, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 13, color: colors.text, backgroundColor: colors.input, fontSize: 14 },
+    editorButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 9 },
+    cancelButton: { minHeight: 42, justifyContent: 'center', paddingHorizontal: 15, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 12 },
+    cancelText: { color: colors.text, fontSize: 12, fontWeight: '800' },
+    saveButton: { minWidth: 82, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: colors.accent },
+    saveText: { color: colors.onAccent, fontSize: 12, fontWeight: '900' },
+    disabled: { opacity: 0.4 },
+    pressed: { opacity: 0.68 },
   });
 }
