@@ -1,7 +1,7 @@
 {
   "name": "pixiv-novel-reader",
   "main": "expo-router/entry",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "dependencies": {
     "@book000/pixivts": "^0.61.2",
     "@expo/ui": "~57.0.4",
@@ -48,7 +48,8 @@
     "typecheck": "tsc --noEmit",
     "check": "bun run typecheck && bun run lint && bun test && bunx expo-doctor",
     "android:apk": "bash ./scripts/build-android-apk.sh",
-    "test": "bun test"
+    "test": "bun test",
+    "icons:generate": "python3 ./scripts/generate-app-icon.py"
   },
   "private": true,
   "packageManager": "bun@1.3.14"
