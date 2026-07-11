@@ -32,6 +32,7 @@ import { parseNovelBlocks, type NovelBlock } from '@/lib/novel-format';
 import {
   fetchNovelDetail,
   fetchNovelText,
+  fetchRelatedNovels,
   setNovelBookmark,
   type NovelReaderContent,
 } from '@/lib/pixiv';
@@ -155,12 +156,17 @@ export default function NovelReaderScreen() {
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [isMoreVisible, setIsMoreVisible] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
+  const [relatedNovels, setRelatedNovels] = useState<PixivNovelItem[]>([]);
+  const [isRelatedLoading, setIsRelatedLoading] = useState(isValidNovelId);
+  const [relatedError, setRelatedError] = useState<string | null>(null);
+  const [relatedAttempt, setRelatedAttempt] = useState(1);
   const [settings, setSettings] = useState<ReaderSettings>({
     theme: isAppDark ? 'black' : 'white',
     fontSize: 'normal',
     lineSpacing: 'wide',
   });
   const fallbackStartedRef = useRef(false);
+  const readerEndOffsetRef = useRef<number | null>(null);
 
   const palette = READER_THEMES[settings.theme];
   const styles = useMemo(() => createStyles(palette), [palette]);
@@ -256,6 +262,56 @@ export default function NovelReaderScreen() {
     };
   }, [isValidNovelId, novelId]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!isValidNovelId) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    async function loadRelatedNovels() {
+      try {
+        const result = await fetchRelatedNovels(novelId);
+
+        if (!isMounted) {
+          return;
+        }
+
+        await SecureStore.setItemAsync(
+          REFRESH_TOKEN_KEY,
+          result.refreshToken,
+        ).catch(() => {});
+
+        if (!isMounted) {
+          return;
+        }
+
+        setRelatedNovels(
+          result.novels
+            .filter((novel) => novel.id !== novelId)
+            .slice(0, 12),
+        );
+        setRelatedError(null);
+      } catch (error) {
+        if (isMounted) {
+          setRelatedError(toErrorMessage(error));
+        }
+      } finally {
+        if (isMounted) {
+          setIsRelatedLoading(false);
+        }
+      }
+    }
+
+    void loadRelatedNovels();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isValidNovelId, novelId, relatedAttempt]);
+
   const handleAjaxSuccess = useCallback((content: NovelReaderContent) => {
     setReaderContent(content);
     setIsAjaxLoading(false);
@@ -337,12 +393,20 @@ export default function NovelReaderScreen() {
 
   function handleScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const maximumOffset = contentSize.height - layoutMeasurement.height;
+    const fallbackMaximumOffset = contentSize.height - layoutMeasurement.height;
+    const readerEndOffset = readerEndOffsetRef.current;
+    const readingMaximumOffset =
+      readerEndOffset === null
+        ? fallbackMaximumOffset
+        : readerEndOffset - layoutMeasurement.height + 76;
 
     setScrollProgress(
-      maximumOffset <= 0
+      readingMaximumOffset <= 0
         ? 1
-        : Math.max(0, Math.min(1, contentOffset.y / maximumOffset)),
+        : Math.max(
+            0,
+            Math.min(1, contentOffset.y / readingMaximumOffset),
+          ),
     );
   }
 
@@ -362,51 +426,50 @@ export default function NovelReaderScreen() {
       )}
 
       <View style={styles.toolbar}>
-        <ToolbarSymbolButton
-          accessibilityLabel="前の画面へ戻る"
-          androidName="arrow_back"
-          iosName="chevron.left"
-          onPress={() => {
-            router.back();
-          }}
-          palette={palette}
-          size={27}
-        />
-        <View style={styles.toolbarSpacer} />
-        <ToolbarButton
-          accessibilityLabel="表示設定"
-          label="Aa"
-          onPress={() => {
-            setIsSettingsVisible(true);
-          }}
-          palette={palette}
-          textStyle={styles.aaIcon}
-        />
-        <ToolbarSymbolButton
-          accessibilityLabel={
-            detail?.isBookmarked
-              ? 'ブックマークを解除する'
-              : 'ブックマークする'
-          }
-          androidName={detail?.isBookmarked ? 'bookmark' : 'bookmark_border'}
-          disabled={!detail || isBookmarkLoading}
-          iosName={detail?.isBookmarked ? 'bookmark.fill' : 'bookmark'}
-          onPress={() => {
-            void toggleBookmark();
-          }}
-          palette={palette}
-          size={26}
-        />
-        <ToolbarSymbolButton
-          accessibilityLabel="その他の操作"
-          androidName="more_horiz"
-          iosName="ellipsis"
-          onPress={() => {
-            setIsMoreVisible(true);
-          }}
-          palette={palette}
-          size={27}
-        />
+        <View style={styles.toolbarSide}>
+          <ToolbarSymbolButton
+            accessibilityLabel="前の画面へ戻る"
+            androidName="arrow_back"
+            iosName="chevron.left"
+            onPress={() => {
+              router.back();
+            }}
+            palette={palette}
+            size={27}
+          />
+        </View>
+        <View style={styles.toolbarTitleArea}>
+          <Text numberOfLines={1} style={styles.toolbarTitle}>
+            {readerContent?.title ?? detail?.title ?? '小説'}
+          </Text>
+        </View>
+        <View style={[styles.toolbarSide, styles.toolbarSideRight]}>
+          <ToolbarSymbolButton
+            accessibilityLabel={
+              detail?.isBookmarked
+                ? 'ブックマークを解除する'
+                : 'ブックマークする'
+            }
+            androidName={detail?.isBookmarked ? 'bookmark' : 'bookmark_border'}
+            disabled={!detail || isBookmarkLoading}
+            iosName={detail?.isBookmarked ? 'bookmark.fill' : 'bookmark'}
+            onPress={() => {
+              void toggleBookmark();
+            }}
+            palette={palette}
+            size={26}
+          />
+          <ToolbarSymbolButton
+            accessibilityLabel="その他の操作"
+            androidName="more_horiz"
+            iosName="ellipsis"
+            onPress={() => {
+              setIsMoreVisible(true);
+            }}
+            palette={palette}
+            size={27}
+          />
+        </View>
       </View>
 
       <View style={styles.progressTrack}>
@@ -468,10 +531,35 @@ export default function NovelReaderScreen() {
             ))}
           </View>
 
-          <View style={styles.readerEnd}>
+          <View
+            onLayout={(event) => {
+              const { height, y } = event.nativeEvent.layout;
+              readerEndOffsetRef.current = y + height;
+            }}
+            style={styles.readerEnd}
+          >
             <Text style={styles.readerEndMark}>◆</Text>
             <Text style={styles.readerEndText}>読了</Text>
           </View>
+
+          <RelatedNovelsSection
+            error={relatedError}
+            isLoading={isRelatedLoading}
+            novels={relatedNovels}
+            onNovelPress={(relatedNovelId) => {
+              router.push({
+                pathname: '/novel/[id]',
+                params: { id: String(relatedNovelId) },
+              });
+            }}
+            onRetry={() => {
+              setIsRelatedLoading(true);
+              setRelatedError(null);
+              setRelatedAttempt((current) => current + 1);
+            }}
+            palette={palette}
+            styles={styles}
+          />
         </ScrollView>
       ) : (
         <View style={styles.centered}>
@@ -491,6 +579,30 @@ export default function NovelReaderScreen() {
           </Pressable>
         </View>
       )}
+
+      {readerContent ? (
+        <View style={styles.floatingControls}>
+          <View style={styles.progressPill}>
+            <Text style={styles.progressPercent}>
+              {Math.round(scrollProgress * 100)}%
+            </Text>
+          </View>
+          <Pressable
+            accessibilityLabel="表示設定を開く"
+            accessibilityRole="button"
+            onPress={() => {
+              setIsSettingsVisible(true);
+            }}
+            style={({ pressed }) => [
+              styles.displayButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.displayButtonAa}>Aa</Text>
+            <Text style={styles.displayButtonLabel}>表示</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <ReaderSettingsModal
         onChange={updateSettings}
@@ -527,42 +639,120 @@ export default function NovelReaderScreen() {
   );
 }
 
-interface ToolbarButtonProps {
-  accessibilityLabel: string;
-  disabled?: boolean;
-  label: string;
-  onPress: () => void;
+interface RelatedNovelsSectionProps {
+  error: string | null;
+  isLoading: boolean;
+  novels: PixivNovelItem[];
+  onNovelPress: (novelId: number) => void;
+  onRetry: () => void;
   palette: ReaderPalette;
-  textStyle?: object;
+  styles: ReturnType<typeof createStyles>;
 }
 
-function ToolbarButton({
-  accessibilityLabel,
-  disabled = false,
-  label,
-  onPress,
+function RelatedNovelsSection({
+  error,
+  isLoading,
+  novels,
+  onNovelPress,
+  onRetry,
   palette,
-  textStyle,
-}: ToolbarButtonProps) {
+  styles,
+}: RelatedNovelsSectionProps) {
   return (
-    <Pressable
-      accessibilityLabel={accessibilityLabel}
-      accessibilityRole="button"
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        toolbarStyles.button,
-        pressed && toolbarStyles.pressed,
-        disabled && toolbarStyles.disabled,
-      ]}
-    >
-      <Text style={[toolbarStyles.text, { color: palette.text }, textStyle]}>
-        {label}
-      </Text>
-    </Pressable>
+    <View style={styles.relatedSection}>
+      <View style={styles.relatedHeadingRow}>
+        <View style={styles.relatedHeadingText}>
+          <Text style={styles.relatedEyebrow}>NEXT READ</Text>
+          <Text style={styles.relatedTitle}>次に読む</Text>
+        </View>
+        {!isLoading && novels.length > 0 ? (
+          <Text style={styles.relatedCount}>{novels.length}作品</Text>
+        ) : null}
+      </View>
+
+      {isLoading ? (
+        <View style={styles.relatedLoading}>
+          <ActivityIndicator color={palette.accent} />
+          <Text style={styles.relatedMuted}>関連作品を探してる…</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.relatedErrorCard}>
+          <Text style={styles.relatedErrorText} numberOfLines={3}>
+            {error}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onRetry}
+            style={({ pressed }) => [
+              styles.relatedRetryButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.relatedRetryText}>再読み込み</Text>
+          </Pressable>
+        </View>
+      ) : novels.length === 0 ? (
+        <Text style={styles.relatedMuted}>関連作品は見つからなかったよ</Text>
+      ) : (
+        <ScrollView
+          contentContainerStyle={styles.relatedList}
+          horizontal
+          nestedScrollEnabled
+          showsHorizontalScrollIndicator={false}
+        >
+          {novels.map((novel) => (
+            <Pressable
+              accessibilityLabel={`${novel.title}を読む`}
+              accessibilityRole="button"
+              key={novel.id}
+              onPress={() => {
+                onNovelPress(novel.id);
+              }}
+              style={({ pressed }) => [
+                styles.relatedCard,
+                pressed && styles.relatedCardPressed,
+              ]}
+            >
+              <Image
+                contentFit="cover"
+                source={{
+                  uri:
+                    novel.imageUrls.medium ||
+                    novel.imageUrls.squareMedium,
+                  headers: {
+                    Referer: 'https://app-api.pixiv.net/',
+                  },
+                }}
+                style={styles.relatedCover}
+                transition={160}
+              />
+              <View style={styles.relatedCardBody}>
+                <Text numberOfLines={2} style={styles.relatedCardTitle}>
+                  {novel.title}
+                </Text>
+                <Text numberOfLines={1} style={styles.relatedAuthor}>
+                  {novel.user.name}
+                </Text>
+                <View style={styles.relatedMetaRow}>
+                  <Text style={styles.relatedMeta}>
+                    {novel.textLength.toLocaleString()}字
+                  </Text>
+                  <Text style={styles.relatedMeta}>
+                    ♡ {novel.totalBookmarks.toLocaleString()}
+                  </Text>
+                </View>
+                <View style={styles.relatedReadRow}>
+                  <Text style={styles.relatedReadText}>読む</Text>
+                  <Text style={styles.relatedArrow}>›</Text>
+                </View>
+              </View>
+            </Pressable>
+          ))}
+        </ScrollView>
+      )}
+    </View>
   );
 }
-
 
 interface ToolbarSymbolButtonProps {
   accessibilityLabel: string;
@@ -953,12 +1143,25 @@ function createStyles(palette: ReaderPalette) {
       borderBottomColor: palette.border,
       backgroundColor: palette.toolbar,
     },
-    toolbarSpacer: {
-      flex: 1,
+    toolbarSide: {
+      width: 104,
+      flexDirection: 'row',
+      alignItems: 'center',
     },
-    aaIcon: {
-      fontSize: 20,
-      fontWeight: '500',
+    toolbarSideRight: {
+      justifyContent: 'flex-end',
+    },
+    toolbarTitleArea: {
+      flex: 1,
+      alignItems: 'center',
+      paddingHorizontal: 6,
+    },
+    toolbarTitle: {
+      width: '100%',
+      color: palette.text,
+      fontSize: 14,
+      fontWeight: '700',
+      textAlign: 'center',
     },
     progressTrack: {
       height: 2,
@@ -1012,7 +1215,7 @@ function createStyles(palette: ReaderPalette) {
       alignSelf: 'center',
       paddingHorizontal: 25,
       paddingTop: 34,
-      paddingBottom: 120,
+      paddingBottom: 178,
       backgroundColor: palette.background,
     },
     workHeader: {
@@ -1116,6 +1319,192 @@ function createStyles(palette: ReaderPalette) {
       color: palette.muted,
       fontSize: 12,
       letterSpacing: 3,
+    },
+    relatedSection: {
+      gap: 18,
+      marginTop: 62,
+      paddingTop: 28,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: palette.border,
+    },
+    relatedHeadingRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      justifyContent: 'space-between',
+      gap: 14,
+    },
+    relatedHeadingText: {
+      gap: 3,
+    },
+    relatedEyebrow: {
+      color: palette.accent,
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 1.5,
+    },
+    relatedTitle: {
+      color: palette.text,
+      fontSize: 22,
+      fontWeight: '800',
+    },
+    relatedCount: {
+      color: palette.muted,
+      fontSize: 11,
+    },
+    relatedLoading: {
+      minHeight: 90,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 10,
+    },
+    relatedMuted: {
+      color: palette.muted,
+      fontSize: 12,
+      lineHeight: 19,
+    },
+    relatedErrorCard: {
+      gap: 12,
+      padding: 16,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.border,
+      borderRadius: 14,
+      backgroundColor: palette.toolbar,
+    },
+    relatedErrorText: {
+      color: palette.muted,
+      fontSize: 12,
+      lineHeight: 19,
+    },
+    relatedRetryButton: {
+      alignSelf: 'flex-start',
+      minHeight: 36,
+      justifyContent: 'center',
+      paddingHorizontal: 15,
+      borderRadius: 18,
+      backgroundColor: palette.accent,
+    },
+    relatedRetryText: {
+      color: '#FFFFFF',
+      fontSize: 12,
+      fontWeight: '800',
+    },
+    relatedList: {
+      gap: 13,
+      paddingRight: 4,
+    },
+    relatedCard: {
+      width: 190,
+      overflow: 'hidden',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.border,
+      borderRadius: 16,
+      backgroundColor: palette.toolbar,
+    },
+    relatedCardPressed: {
+      opacity: 0.72,
+      transform: [{ scale: 0.985 }],
+    },
+    relatedCover: {
+      width: '100%',
+      height: 124,
+      backgroundColor: palette.border,
+    },
+    relatedCardBody: {
+      minHeight: 145,
+      gap: 6,
+      padding: 13,
+    },
+    relatedCardTitle: {
+      color: palette.text,
+      fontSize: 14,
+      fontWeight: '800',
+      lineHeight: 20,
+    },
+    relatedAuthor: {
+      color: palette.muted,
+      fontSize: 11,
+    },
+    relatedMetaRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    relatedMeta: {
+      color: palette.muted,
+      fontSize: 10,
+    },
+    relatedReadRow: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      justifyContent: 'flex-end',
+      gap: 5,
+      paddingTop: 4,
+    },
+    relatedReadText: {
+      color: palette.accent,
+      fontSize: 12,
+      fontWeight: '800',
+    },
+    relatedArrow: {
+      color: palette.accent,
+      fontSize: 21,
+      lineHeight: 20,
+    },
+    floatingControls: {
+      position: 'absolute',
+      right: 16,
+      bottom: 20,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    progressPill: {
+      minWidth: 55,
+      minHeight: 42,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 13,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.border,
+      borderRadius: 22,
+      backgroundColor: palette.toolbar,
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: palette.isDark ? 0.32 : 0.14,
+      shadowRadius: 12,
+      elevation: 5,
+    },
+    progressPercent: {
+      color: palette.muted,
+      fontSize: 11,
+      fontWeight: '800',
+      fontVariant: ['tabular-nums'],
+    },
+    displayButton: {
+      minHeight: 48,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 7,
+      paddingHorizontal: 16,
+      borderRadius: 24,
+      backgroundColor: palette.accent,
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: palette.isDark ? 0.34 : 0.2,
+      shadowRadius: 13,
+      elevation: 6,
+    },
+    displayButtonAa: {
+      color: '#FFFFFF',
+      fontSize: 18,
+      fontWeight: '700',
+    },
+    displayButtonLabel: {
+      color: '#FFFFFF',
+      fontSize: 12,
+      fontWeight: '800',
     },
     pressed: {
       opacity: 0.62,
@@ -1229,9 +1618,6 @@ const toolbarStyles = StyleSheet.create({
     minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  text: {
-    textAlign: 'center',
   },
   pressed: {
     opacity: 0.55,

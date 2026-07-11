@@ -217,6 +217,24 @@ export async function fetchNovelDetail(
   return result.value.novel;
 }
 
+/** 現在の作品に近い小説をApp APIから取得する。 */
+export async function fetchRelatedNovels(
+  novelId: number,
+): Promise<NovelPageResult> {
+  const client = requireClient();
+  const result = await client.novels.related({ novelId });
+
+  if (result.isErr) {
+    throw new Error(formatPixivError(result.error));
+  }
+
+  return {
+    novels: result.value.novels,
+    nextUrl: result.value.nextUrl,
+    refreshToken: client.getRefreshToken(),
+  };
+}
+
 /**
  * App APIのWebView HTMLから本文を取得するフォールバック。
  * 通常はWebView cookieを利用した `/ajax/novel/{id}` を先に試す。
