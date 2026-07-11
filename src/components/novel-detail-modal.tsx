@@ -44,6 +44,7 @@ export function NovelDetailModal({
   const [detail, setDetail] = useState(novel);
   const [isDetailLoading, setIsDetailLoading] = useState(true);
   const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
+  const [isOpeningReader, setIsOpeningReader] = useState(false);
   const [bookmarkState, setBookmarkState] = useState<BookmarkState>({
     value: novel.isBookmarked,
     source: 'route',
@@ -52,6 +53,11 @@ export function NovelDetailModal({
     value: novel.isBookmarked,
     source: 'route',
   });
+  const readerCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readerFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const readerClosedRef = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const applyBookmarkState = useCallback(
@@ -107,6 +113,37 @@ export function NovelDetailModal({
 
   const caption = useMemo(() => stripHtml(detail.caption), [detail.caption]);
 
+  const closeDetailAfterReaderNavigation = useCallback(() => {
+    if (readerClosedRef.current) {
+      return;
+    }
+
+    readerClosedRef.current = true;
+
+    if (readerCloseTimerRef.current) {
+      clearTimeout(readerCloseTimerRef.current);
+      readerCloseTimerRef.current = null;
+    }
+
+    if (readerFallbackTimerRef.current) {
+      clearTimeout(readerFallbackTimerRef.current);
+      readerFallbackTimerRef.current = null;
+    }
+
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    return () => {
+      if (readerCloseTimerRef.current) {
+        clearTimeout(readerCloseTimerRef.current);
+      }
+      if (readerFallbackTimerRef.current) {
+        clearTimeout(readerFallbackTimerRef.current);
+      }
+    };
+  }, []);
+
   async function toggleBookmark() {
     if (isBookmarkLoading) {
       return;
@@ -144,25 +181,43 @@ export function NovelDetailModal({
   }
 
   function openReaderFromBeginning() {
-    router.push({
-      pathname: '/novel/[id]',
-      params: {
-        bookmarked: bookmarkState.value ? '1' : '0',
-        id: String(detail.id),
-      },
-    });
+    if (isOpeningReader) {
+      return;
+    }
 
-    // 読書ページを背面へ積んでから詳細モーダルを閉じる。
-    // 先に閉じるとホームが一瞬見えるため、画面遷移完了後に閉じる。
-    InteractionManager.runAfterInteractions(() => {
-      onClose();
+    readerClosedRef.current = false;
+    setIsOpeningReader(true);
+
+    // 先に不透明な読書カバーを描画してからrouteを積む。
+    // Modalを先に閉じるとホームが、routeを先に積むだけだと詳細が一瞬見える。
+    requestAnimationFrame(() => {
+      router.push({
+        pathname: '/novel/[id]',
+        params: {
+          bookmarked: bookmarkState.value ? '1' : '0',
+          id: String(detail.id),
+        },
+      });
+
+      InteractionManager.runAfterInteractions(() => {
+        readerCloseTimerRef.current = setTimeout(
+          closeDetailAfterReaderNavigation,
+          80,
+        );
+      });
+
+      // InteractionManagerが端末依存で返らない場合の安全弁。
+      readerFallbackTimerRef.current = setTimeout(
+        closeDetailAfterReaderNavigation,
+        1_400,
+      );
     });
   }
 
   return (
     <Modal
       animationType="slide"
-      onRequestClose={onClose}
+      onRequestClose={isOpeningReader ? () => {} : onClose}
       presentationStyle="pageSheet"
       visible
     >
@@ -170,6 +225,7 @@ export function NovelDetailModal({
         <View style={styles.header}>
           <Pressable
             accessibilityRole="button"
+            disabled={isOpeningReader}
             onPress={onClose}
             style={({ pressed }) => [
               styles.headerButton,
@@ -216,6 +272,7 @@ export function NovelDetailModal({
 
           <Pressable
             accessibilityRole="button"
+            disabled={isOpeningReader}
             onPress={openReaderFromBeginning}
             style={({ pressed }) => [
               styles.readButton,
@@ -286,6 +343,20 @@ export function NovelDetailModal({
             </View>
           )}
         </ScrollView>
+
+        {isOpeningReader ? (
+          <View
+            accessibilityLabel="読書画面を開いています"
+            accessibilityViewIsModal
+            style={styles.readerTransition}
+          >
+            <ActivityIndicator color={colors.accent} size="large" />
+            <Text numberOfLines={2} style={styles.readerTransitionTitle}>
+              {detail.title}
+            </Text>
+            <Text style={styles.readerTransitionText}>読書画面を開いてる…</Text>
+          </View>
+        ) : null}
       </SafeAreaView>
     </Modal>
   );
@@ -315,6 +386,32 @@ function createStyles(colors: AppColors) {
     safeArea: {
       flex: 1,
       backgroundColor: colors.background,
+    },
+    readerTransition: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      zIndex: 100,
+      elevation: 24,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 14,
+      paddingHorizontal: 34,
+      backgroundColor: colors.background,
+    },
+    readerTransitionTitle: {
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: '900',
+      lineHeight: 26,
+      textAlign: 'center',
+    },
+    readerTransitionText: {
+      color: colors.textMuted,
+      fontSize: 12,
+      fontWeight: '700',
     },
     header: {
       minHeight: 58,

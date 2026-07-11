@@ -26,6 +26,7 @@ import {
   type NativeSyntheticEvent,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Path as SvgPath } from 'react-native-svg';
 
 import { PixivNovelAjaxLoader } from '@/components/pixiv-novel-ajax-loader';
 import {
@@ -803,20 +804,19 @@ export default function NovelReaderScreen() {
           </Text>
         </View>
         <View style={[styles.toolbarSide, styles.toolbarSideRight]}>
-          <ToolbarSymbolButton
+          <ToolbarBookmarkButton
             accessibilityLabel={
               bookmarkState.value
                 ? 'ブックマークを解除する'
                 : 'ブックマークする'
             }
-            androidName={bookmarkState.value ? 'bookmark' : 'bookmark_border'}
+            bookmarked={bookmarkState.value === true}
             disabled={bookmarkState.value === null || isBookmarkLoading}
-            iosName={bookmarkState.value ? 'bookmark.fill' : 'bookmark'}
             onPress={() => {
               void toggleBookmark();
             }}
             palette={palette}
-            size={26}
+            size={27}
           />
           <ToolbarSymbolButton
             accessibilityLabel="その他の操作"
@@ -1150,6 +1150,56 @@ function RecommendationSection({
         </ScrollView>
       )}
     </View>
+  );
+}
+
+interface ToolbarBookmarkButtonProps {
+  accessibilityLabel: string;
+  bookmarked: boolean;
+  disabled?: boolean;
+  onPress: () => void;
+  palette: ReaderPalette;
+  size: number;
+}
+
+function ToolbarBookmarkButton({
+  accessibilityLabel,
+  bookmarked,
+  disabled = false,
+  onPress,
+  palette,
+  size,
+}: ToolbarBookmarkButtonProps) {
+  return (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      accessibilityState={{ busy: disabled, disabled, selected: bookmarked }}
+      disabled={disabled}
+      hitSlop={10}
+      onPress={onPress}
+      style={({ pressed }) => [
+        toolbarStyles.button,
+        pressed && toolbarStyles.pressed,
+        disabled && toolbarStyles.disabled,
+      ]}
+    >
+      <Svg
+        accessibilityElementsHidden
+        height={size}
+        pointerEvents="none"
+        viewBox="0 0 24 24"
+        width={size}
+      >
+        <SvgPath
+          d="M6 2.75h12A2.25 2.25 0 0 1 20.25 5v16.15a.85.85 0 0 1-1.2.78L12 18.82l-7.05 3.11a.85.85 0 0 1-1.2-.78V5A2.25 2.25 0 0 1 6 2.75Z"
+          fill={bookmarked ? palette.accent : 'none'}
+          stroke={bookmarked ? palette.accent : palette.text}
+          strokeLinejoin="round"
+          strokeWidth={bookmarked ? 0 : 1.9}
+        />
+      </Svg>
+    </Pressable>
   );
 }
 
