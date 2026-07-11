@@ -665,6 +665,12 @@ export default function HomeScreen() {
           <EmptyFeed
             error={activeFeed.error}
             isLoading={activeFeed.isLoading}
+            onRetry={() => {
+              if (activeTab === 'search' && !submittedSearchWord) {
+                return;
+              }
+              void requestFeed(activeTab);
+            }}
             tab={activeTab}
           />
         }
@@ -1009,10 +1015,12 @@ function FilterChip({
 function EmptyFeed({
   error,
   isLoading,
+  onRetry,
   tab,
 }: {
   error: string | null;
   isLoading: boolean;
+  onRetry: () => void;
   tab: AppTab;
 }) {
   const { colors } = useAppTheme();
@@ -1033,6 +1041,16 @@ function EmptyFeed({
         <Text style={styles.emptyEmoji}>⚠️</Text>
         <Text style={styles.emptyTitle}>取得できなかった</Text>
         <Text style={styles.emptyText}>{error}</Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={onRetry}
+          style={({ pressed }) => [
+            styles.retryButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.retryButtonText}>もう一度読み込む</Text>
+        </Pressable>
       </View>
     );
   }
@@ -1479,6 +1497,20 @@ function createStyles(colors: AppColors) {
     fontSize: 13,
     lineHeight: 20,
     textAlign: 'center',
+  },
+  retryButton: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+    paddingHorizontal: 20,
+    borderRadius: 13,
+    backgroundColor: colors.accent,
+  },
+  retryButtonText: {
+    color: colors.onAccent,
+    fontSize: 13,
+    fontWeight: '900',
   },
   footerLoading: {
     flexDirection: 'row',

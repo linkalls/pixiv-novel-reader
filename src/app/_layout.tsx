@@ -1,9 +1,13 @@
+import * as SecureStore from 'expo-secure-store';
 import * as SystemUI from 'expo-system-ui';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 
+import { subscribePixivRefreshToken } from '@/lib/pixiv';
 import { AppThemeProvider, useAppTheme } from '@/theme';
+
+const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 
 export default function RootLayout() {
   return (
@@ -19,6 +23,14 @@ function RootNavigator() {
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(colors.background).catch(() => {});
   }, [colors.background]);
+
+  useEffect(
+    () =>
+      subscribePixivRefreshToken((refreshToken) =>
+        SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken),
+      ),
+    [],
+  );
 
   return (
     <>

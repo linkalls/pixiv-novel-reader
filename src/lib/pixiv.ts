@@ -8,6 +8,7 @@ import {
   type NovelSeriesDetail,
   type PixivError,
   type PixivNovelItem,
+  type Result,
 } from '@book000/pixivts';
 
 export type BookmarkVisibility = 'public' | 'private';
@@ -81,6 +82,29 @@ interface EmbeddedNovelPayload {
 }
 
 let currentClient: PixivClient | null = null;
+let recoveryPromise: Promise<PixivClient> | null = null;
+let lastNotifiedRefreshToken: string | null = null;
+const refreshTokenListeners = new Set<
+  (refreshToken: string) => void | Promise<void>
+>();
+
+/**
+ * Pixiv側でrefresh tokenがローテーションされたときに通知する。
+ * ルートレイアウト側でSecureStoreへ保存し、画面遷移中も最新tokenを失わない。
+ */
+export function subscribePixivRefreshToken(
+  listener: (refreshToken: string) => void | Promise<void>,
+): () => void {
+  refreshTokenListeners.add(listener);
+
+  if (currentClient) {
+    void Promise.resolve(listener(currentClient.getRefreshToken())).catch(() => {});
+  }
+
+  return () => {
+    refreshTokenListeners.delete(listener);
+  };
+}
 
 /**
  * refresh tokenからPixivクライアントを初期化する。
@@ -95,38 +119,33 @@ export async function connectPixiv(refreshToken: string): Promise<PixivSession> 
     throw new Error('refresh tokenが空です');
   }
 
-  currentClient = await PixivClient.of(normalizedToken, {
-    retry: {
-      maxRetries: 2,
-      waitMs: 1_500,
-    },
-  });
+  currentClient = await createPixivClient(normalizedToken);
+  notifyRefreshToken(currentClient);
 
   return getSession(currentClient);
 }
 
 export function disconnectPixiv(): void {
   currentClient = null;
+  recoveryPromise = null;
+  lastNotifiedRefreshToken = null;
 }
 
 export async function fetchRecommendedNovels(
   nextUrl?: string | null,
 ): Promise<NovelPageResult> {
-  const client = requireClient();
   const cursor = nextUrl ? parseNextUrl(nextUrl) : {};
-  const result = await client.novels.recommended({
-    offset: cursor.offset,
-    maxBookmarkIdForRecommend: cursor.maxBookmarkIdForRecommend,
-  });
-
-  if (result.isErr) {
-    throw new Error(formatPixivError(result.error));
-  }
+  const page = await performPixivRequest((client) =>
+    client.novels.recommended({
+      offset: cursor.offset,
+      maxBookmarkIdForRecommend: cursor.maxBookmarkIdForRecommend,
+    }),
+  );
 
   return {
-    novels: result.value.novels,
-    nextUrl: result.value.nextUrl,
-    refreshToken: client.getRefreshToken(),
+    novels: page.novels,
+    nextUrl: page.nextUrl,
+    refreshToken: requireClient().getRefreshToken(),
   };
 }
 
@@ -134,26 +153,23 @@ export async function fetchBookmarkedNovels(
   visibility: BookmarkVisibility,
   nextUrl?: string | null,
 ): Promise<NovelPageResult> {
-  const client = requireClient();
   const cursor = nextUrl ? parseNextUrl(nextUrl) : {};
-  const result = await client.users.bookmarks.novels({
-    userId: client.userId,
-    restrict:
-      visibility === 'private'
-        ? BookmarkRestrict.PRIVATE
-        : BookmarkRestrict.PUBLIC,
-    maxBookmarkId: cursor.maxBookmarkId,
-    offset: cursor.offset,
-  });
-
-  if (result.isErr) {
-    throw new Error(formatPixivError(result.error));
-  }
+  const page = await performPixivRequest((client) =>
+    client.users.bookmarks.novels({
+      userId: client.userId,
+      restrict:
+        visibility === 'private'
+          ? BookmarkRestrict.PRIVATE
+          : BookmarkRestrict.PUBLIC,
+      maxBookmarkId: cursor.maxBookmarkId,
+      offset: cursor.offset,
+    }),
+  );
 
   return {
-    novels: result.value.novels,
-    nextUrl: result.value.nextUrl,
-    refreshToken: client.getRefreshToken(),
+    novels: page.novels,
+    nextUrl: page.nextUrl,
+    refreshToken: requireClient().getRefreshToken(),
   };
 }
 
@@ -161,21 +177,18 @@ export async function fetchNovelRanking(
   mode: NovelRanking,
   nextUrl?: string | null,
 ): Promise<NovelPageResult> {
-  const client = requireClient();
   const cursor = nextUrl ? parseNextUrl(nextUrl) : {};
-  const result = await client.novels.ranking({
-    mode: toRankingMode(mode),
-    offset: cursor.offset,
-  });
-
-  if (result.isErr) {
-    throw new Error(formatPixivError(result.error));
-  }
+  const page = await performPixivRequest((client) =>
+    client.novels.ranking({
+      mode: toRankingMode(mode),
+      offset: cursor.offset,
+    }),
+  );
 
   return {
-    novels: result.value.novels,
-    nextUrl: result.value.nextUrl,
-    refreshToken: client.getRefreshToken(),
+    novels: page.novels,
+    nextUrl: page.nextUrl,
+    refreshToken: requireClient().getRefreshToken(),
   };
 }
 
@@ -191,54 +204,44 @@ export async function searchNovels(
     throw new Error('検索語を入力してください');
   }
 
-  const client = requireClient();
   const cursor = nextUrl ? parseNextUrl(nextUrl) : {};
-  const result = await client.novels.search({
-    word: normalizedWord,
-    searchTarget: toSearchTarget(target),
-    sort: toSearchSort(sort),
-    offset: cursor.offset,
-  });
-
-  if (result.isErr) {
-    throw new Error(formatPixivError(result.error));
-  }
+  const page = await performPixivRequest((client) =>
+    client.novels.search({
+      word: normalizedWord,
+      searchTarget: toSearchTarget(target),
+      sort: toSearchSort(sort),
+      offset: cursor.offset,
+    }),
+  );
 
   return {
-    novels: result.value.novels,
-    nextUrl: result.value.nextUrl,
-    refreshToken: client.getRefreshToken(),
+    novels: page.novels,
+    nextUrl: page.nextUrl,
+    refreshToken: requireClient().getRefreshToken(),
   };
 }
 
 export async function fetchNovelDetail(
   novelId: number,
 ): Promise<PixivNovelItem> {
-  const client = requireClient();
-  const result = await client.novels.detail({ novelId });
-
-  if (result.isErr) {
-    throw new Error(formatPixivError(result.error));
-  }
-
-  return result.value.novel;
+  const detail = await performPixivRequest((client) =>
+    client.novels.detail({ novelId }),
+  );
+  return detail.novel;
 }
 
 /** 現在の作品に近い小説をApp APIから取得する。 */
 export async function fetchRelatedNovels(
   novelId: number,
 ): Promise<NovelPageResult> {
-  const client = requireClient();
-  const result = await client.novels.related({ novelId });
-
-  if (result.isErr) {
-    throw new Error(formatPixivError(result.error));
-  }
+  const page = await performPixivRequest((client) =>
+    client.novels.related({ novelId }),
+  );
 
   return {
-    novels: result.value.novels,
-    nextUrl: result.value.nextUrl,
-    refreshToken: client.getRefreshToken(),
+    novels: page.novels,
+    nextUrl: page.nextUrl,
+    refreshToken: requireClient().getRefreshToken(),
   };
 }
 
@@ -246,33 +249,30 @@ export async function fetchRelatedNovels(
 export async function fetchNovelSeries(
   seriesId: number,
 ): Promise<NovelSeriesResult> {
-  const client = requireClient();
   const novels: PixivNovelItem[] = [];
   const seenIds = new Set<number>();
   let lastOrder: number | undefined;
   let detail: NovelSeriesDetail | null = null;
 
   for (let pageNumber = 0; pageNumber < 200; pageNumber += 1) {
-    const result = await client.novels.series({ seriesId, lastOrder });
+    const page = await performPixivRequest((client) =>
+      client.novels.series({ seriesId, lastOrder }),
+    );
 
-    if (result.isErr) {
-      throw new Error(formatPixivError(result.error));
-    }
+    detail ??= page.novelSeriesDetail;
 
-    detail ??= result.value.novelSeriesDetail;
-
-    for (const novel of result.value.novels) {
+    for (const novel of page.novels) {
       if (!seenIds.has(novel.id)) {
         seenIds.add(novel.id);
         novels.push(novel);
       }
     }
 
-    if (!result.value.nextUrl) {
+    if (!page.nextUrl) {
       break;
     }
 
-    const cursor = parseNextUrl(result.value.nextUrl);
+    const cursor = parseNextUrl(page.nextUrl);
 
     if (cursor.lastOrder === undefined || cursor.lastOrder === lastOrder) {
       break;
@@ -288,7 +288,7 @@ export async function fetchNovelSeries(
   return {
     detail,
     novels,
-    refreshToken: client.getRefreshToken(),
+    refreshToken: requireClient().getRefreshToken(),
   };
 }
 
@@ -299,33 +299,26 @@ export async function fetchNovelSeries(
 export async function fetchNovelText(
   novelId: number,
 ): Promise<NovelReaderContent> {
-  const client = requireClient();
-  const result = await client.novels.text({ novelId });
-
-  if (result.isErr) {
-    throw new Error(formatPixivError(result.error));
-  }
-
-  return parseNovelWebviewHtml(result.value, novelId);
+  const html = await performPixivRequest((client) =>
+    client.novels.text({ novelId }),
+  );
+  return parseNovelWebviewHtml(html, novelId);
 }
 
 export async function setNovelBookmark(
   novelId: number,
   shouldBookmark: boolean,
 ): Promise<string> {
-  const client = requireClient();
-  const result = shouldBookmark
-    ? await client.novels.bookmarkAdd({
-        novelId,
-        restrict: BookmarkRestrict.PUBLIC,
-      })
-    : await client.novels.bookmarkDelete({ novelId });
+  await performPixivRequest((client) =>
+    shouldBookmark
+      ? client.novels.bookmarkAdd({
+          novelId,
+          restrict: BookmarkRestrict.PUBLIC,
+        })
+      : client.novels.bookmarkDelete({ novelId }),
+  );
 
-  if (result.isErr) {
-    throw new Error(formatPixivError(result.error));
-  }
-
-  return client.getRefreshToken();
+  return requireClient().getRefreshToken();
 }
 
 /** `www.pixiv.net/ajax/novel/{id}` のJSONをリーダー用データへ変換する。 */
@@ -551,6 +544,121 @@ function collectLegacyEmbeddedImages(
   }
 
   return result;
+}
+
+type PixivOperation<T> = (
+  client: PixivClient,
+) => PromiseLike<Result<T, PixivError>>;
+
+async function createPixivClient(refreshToken: string): Promise<PixivClient> {
+  return PixivClient.of(refreshToken, {
+    retry: {
+      maxRetries: 2,
+      waitMs: 1_500,
+    },
+  });
+}
+
+/**
+ * 期限切れaccess tokenをPixiv側が401ではなく400/403で返す場合もある。
+ * 認証由来と判定できる失敗だけクライアントを作り直し、同じ要求を一度だけ再実行する。
+ */
+async function performPixivRequest<T>(
+  operation: PixivOperation<T>,
+): Promise<T> {
+  let client = requireClient();
+  let result = await operation(client);
+
+  if (result.isErr && shouldRecoverSession(result.error)) {
+    try {
+      client = await recoverPixivClient(client);
+      result = await operation(client);
+    } catch {
+      throw new Error(
+        'Pixiv認証を更新できませんでした。設定から再ログインしてください',
+      );
+    }
+  }
+
+  if (result.isErr) {
+    if (shouldRecoverSession(result.error)) {
+      throw new Error(
+        'Pixiv認証を更新できませんでした。設定から再ログインしてください',
+      );
+    }
+    throw new Error(formatPixivError(result.error));
+  }
+
+  notifyRefreshToken(client);
+  return result.value;
+}
+
+async function recoverPixivClient(failedClient: PixivClient): Promise<PixivClient> {
+  if (currentClient && currentClient !== failedClient) {
+    return currentClient;
+  }
+
+  if (!recoveryPromise) {
+    const refreshToken = failedClient.getRefreshToken();
+    recoveryPromise = createPixivClient(refreshToken)
+      .then((client) => {
+        currentClient = client;
+        notifyRefreshToken(client);
+        return client;
+      })
+      .finally(() => {
+        recoveryPromise = null;
+      });
+  }
+
+  return recoveryPromise;
+}
+
+function shouldRecoverSession(error: PixivError): boolean {
+  if (error.type === 'auth_failed') {
+    return true;
+  }
+
+  if (
+    error.type !== 'api_error' ||
+    ![400, 401, 403].includes(error.status)
+  ) {
+    return false;
+  }
+
+  const bodyText = stringifyErrorBody(error.body).toLocaleLowerCase('en-US');
+  return /oauth|access[ _-]?token|invalid[ _-]?token|authentication|authenticate|invalid_grant/.test(
+    bodyText,
+  );
+}
+
+function stringifyErrorBody(body: unknown): string {
+  if (typeof body === 'string') {
+    return body;
+  }
+
+  try {
+    return JSON.stringify(body);
+  } catch {
+    return String(body);
+  }
+}
+
+function notifyRefreshToken(client: PixivClient): void {
+  const refreshToken = client.getRefreshToken();
+
+  if (
+    refreshToken.length === 0 ||
+    refreshToken === lastNotifiedRefreshToken
+  ) {
+    return;
+  }
+
+  lastNotifiedRefreshToken = refreshToken;
+
+  for (const listener of refreshTokenListeners) {
+    void Promise.resolve(listener(refreshToken)).catch(() => {});
+  }
 }
 
 function requireClient(): PixivClient {
