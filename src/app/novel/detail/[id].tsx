@@ -23,6 +23,9 @@ import {
   type BookmarkState,
   type BookmarkStateSource,
 } from '@/lib/bookmark-state';
+import {
+  buildReaderRouteParams,
+} from '@/lib/reader-flow';
 import { getReadingHistory, type LibraryNovel } from '@/lib/library-db';
 import {
   emitNovelChanged,
@@ -262,12 +265,11 @@ export default function NovelDetailScreen() {
     requestAnimationFrame(() => {
       router.push({
         pathname: '/novel/[id]',
-        params: {
-          bookmarked: bookmarkState.value ? '1' : '0',
-          fromDetail: '1',
-          id: String(detail.id),
-          ...(resume ? { resume: '1' } : {}),
-        },
+        params: buildReaderRouteParams(detail.id, {
+          bookmarked: bookmarkState.value,
+          fromDetail: true,
+          resume,
+        }),
       });
 
       if (readerTransitionTimerRef.current) {

@@ -29,7 +29,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
+import { NovelSeriesModal } from '@/components/novel-series-modal';
 import { PixivNovelAjaxLoader } from '@/components/pixiv-novel-ajax-loader';
+import {
+  ReaderNavigationModal,
+  type ReaderNavigationMode,
+} from '@/components/reader-navigation-modal';
 import {
   parseBookmarkRouteParam,
   resolveBookmarkState,
@@ -42,13 +47,30 @@ import {
   getReadingHistory,
   recordNovelOpened,
   saveOfflineNovel,
+  updateOfflineNovelDetail,
   updateReadingProgress,
 } from '@/lib/library-db';
 import { emitNovelChanged } from '@/lib/novel-events';
+import {
+  buildDetailRouteParams,
+  buildReaderRouteParams,
+  resolveReaderDetailAction,
+} from '@/lib/reader-flow';
 import { cacheNovelForRoute } from '@/lib/novel-route-cache';
+import {
+  getAdjacentSeriesNovels,
+  getNovelSeries,
+} from '@/lib/novel-series';
+import { localizeNovelImages } from '@/lib/offline-assets';
 import { parseNovelBlocks, type NovelBlock } from '@/lib/novel-format';
 import {
+  buildReaderToc,
+  searchReaderBlocks,
+  type ReaderTocEntry,
+} from '@/lib/reader-navigation';
+import {
   fetchNovelDetail,
+  fetchNovelSeries,
   fetchNovelText,
   fetchRecommendedNovels,
   fetchRelatedNovels,
@@ -199,6 +221,20 @@ export default function NovelReaderScreen() {
   );
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [isMoreVisible, setIsMoreVisible] = useState(false);
+  const [isNavigatorVisible, setIsNavigatorVisible] = useState(false);
+  const [navigationMode, setNavigationMode] =
+    useState<ReaderNavigationMode>('toc');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeSearchMatchIndex, setActiveSearchMatchIndex] = useState(-1);
+  const [isSeriesVisible, setIsSeriesVisible] = useState(false);
+  const [seriesNovels, setSeriesNovels] = useState<PixivNovelItem[]>([]);
+  const [seriesTitle, setSeriesTitle] = useState('');
+  const [isSeriesLoading, setIsSeriesLoading] = useState(false);
+  const [seriesError, setSeriesError] = useState<string | null>(null);
+  const [seriesAttempt, setSeriesAttempt] = useState(0);
+  const [offlineImageProgress, setOfflineImageProgress] = useState<string | null>(
+    null,
+  );
   const [scrollProgress, setScrollProgress] = useState(0);
   const [relatedNovels, setRelatedNovels] = useState<PixivNovelItem[]>([]);
   const [isRelatedLoading, setIsRelatedLoading] = useState(isValidNovelId);
@@ -216,6 +252,8 @@ export default function NovelReaderScreen() {
   });
   const fallbackStartedRef = useRef(false);
   const readerEndOffsetRef = useRef<number | null>(null);
+  const novelBodyOffsetRef = useRef(0);
+  const blockOffsetsRef = useRef<Record<number, number>>({});
   const scrollViewRef = useRef<ScrollView>(null);
   const currentProgressRef = useRef(0);
   const currentScrollOffsetRef = useRef(0);
@@ -233,6 +271,21 @@ export default function NovelReaderScreen() {
   const blocks = useMemo(
     () => (readerContent ? parseNovelBlocks(readerContent.text) : []),
     [readerContent],
+  );
+  const tocEntries = useMemo(() => buildReaderToc(blocks), [blocks]);
+  const searchMatches = useMemo(
+    () => searchReaderBlocks(blocks, searchQuery),
+    [blocks, searchQuery],
+  );
+  const activeSearchBlockIndex =
+    activeSearchMatchIndex >= 0
+      ? (searchMatches[activeSearchMatchIndex]?.blockIndex ?? -1)
+      : -1;
+  const series = getNovelSeries(detail);
+  const seriesId = series?.id ?? null;
+  const adjacentSeries = useMemo(
+    () => getAdjacentSeriesNovels(seriesNovels, novelId),
+    [novelId, seriesNovels],
   );
   const discoveryItems = useMemo(() => {
     const relatedIds = new Set(relatedNovels.map((novel) => novel.id));
@@ -418,6 +471,52 @@ export default function NovelReaderScreen() {
   useEffect(() => {
     let isMounted = true;
 
+    if (!seriesId) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const currentSeriesId = seriesId;
+
+    async function loadSeries() {
+      setIsSeriesLoading(true);
+      setSeriesError(null);
+
+      try {
+        const result = await fetchNovelSeries(currentSeriesId);
+
+        if (!isMounted) {
+          return;
+        }
+
+        setSeriesTitle(result.detail.title);
+        setSeriesNovels(result.novels);
+        await SecureStore.setItemAsync(
+          REFRESH_TOKEN_KEY,
+          result.refreshToken,
+        ).catch(() => {});
+      } catch (error) {
+        if (isMounted) {
+          setSeriesError(toErrorMessage(error));
+        }
+      } finally {
+        if (isMounted) {
+          setIsSeriesLoading(false);
+        }
+      }
+    }
+
+    void loadSeries();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [seriesAttempt, seriesId]);
+
+  useEffect(() => {
+    let isMounted = true;
+
     if (!isValidNovelId || !isOfflineChecked) {
       return () => {
         isMounted = false;
@@ -560,18 +659,15 @@ export default function NovelReaderScreen() {
   );
 
   useEffect(() => {
-    if (!isOfflineSaved || !detail || !readerContent) {
+    if (!isOfflineSaved || !detail) {
       return;
     }
 
-    void saveOfflineNovel(
-      {
-        ...detail,
-        isBookmarked: bookmarkState.value ?? detail.isBookmarked,
-      },
-      readerContent,
-    );
-  }, [bookmarkState.value, detail, isOfflineSaved, readerContent]);
+    void updateOfflineNovelDetail({
+      ...detail,
+      isBookmarked: bookmarkState.value ?? detail.isBookmarked,
+    });
+  }, [bookmarkState.value, detail, isOfflineSaved]);
 
   useEffect(() => {
     if (!detail || !readerContent || historyNovelIdRef.current === detail.id) {
@@ -702,20 +798,34 @@ export default function NovelReaderScreen() {
         hasOfflineContentRef.current = false;
         showStatus('オフライン保存を削除したよ');
       } else {
+        const localizedContent = await localizeNovelImages(
+          detail.id,
+          readerContent,
+          ({ completed, total }) => {
+            setOfflineImageProgress(
+              total > 0 ? `挿絵を保存中 ${completed}/${total}` : null,
+            );
+          },
+        );
         await saveOfflineNovel(
           {
             ...detail,
             isBookmarked: bookmarkState.value ?? detail.isBookmarked,
           },
-          readerContent,
+          localizedContent,
         );
         setIsOfflineSaved(true);
         hasOfflineContentRef.current = true;
-        showStatus('本文をオフライン保存したよ');
+        showStatus(
+          Object.keys(localizedContent.embeddedImages).length > 0
+            ? '本文と挿絵をオフライン保存したよ'
+            : '本文をオフライン保存したよ',
+        );
       }
     } catch (error) {
       showStatus(`オフライン保存を変更できなかった: ${toErrorMessage(error)}`);
     } finally {
+      setOfflineImageProgress(null);
       setIsOfflineLoading(false);
     }
   }
@@ -757,6 +867,41 @@ export default function NovelReaderScreen() {
 
     setScrollProgress(nextProgress);
     scheduleProgressSave(nextProgress, contentOffset.y);
+  }
+
+  function jumpToBlock(blockIndex: number) {
+    const blockOffset = blockOffsetsRef.current[blockIndex] ?? 0;
+    const y = Math.max(0, novelBodyOffsetRef.current + blockOffset - 18);
+    scrollViewRef.current?.scrollTo({ animated: true, y });
+  }
+
+  function selectTocEntry(entry: ReaderTocEntry) {
+    setIsNavigatorVisible(false);
+    setActiveSearchMatchIndex(-1);
+    requestAnimationFrame(() => jumpToBlock(entry.blockIndex));
+  }
+
+  function selectSearchMatch(index: number) {
+    const match = searchMatches[index];
+
+    if (!match) {
+      return;
+    }
+
+    setActiveSearchMatchIndex(index);
+    setIsNavigatorVisible(false);
+    requestAnimationFrame(() => jumpToBlock(match.blockIndex));
+  }
+
+  function openSeriesNovel(novel: PixivNovelItem) {
+    cacheNovelForRoute(novel);
+    setIsSeriesVisible(false);
+    router.push({
+      pathname: '/novel/[id]',
+      params: buildReaderRouteParams(novel.id, {
+        bookmarked: novel.isBookmarked,
+      }),
+    });
   }
 
   function restoreReadingPosition() {
@@ -886,17 +1031,33 @@ export default function NovelReaderScreen() {
 
           <View style={styles.titleDivider} />
 
-          <View style={styles.novelBody}>
+          <View
+            onLayout={(event) => {
+              novelBodyOffsetRef.current = event.nativeEvent.layout.y;
+            }}
+            style={styles.novelBody}
+          >
             {blocks.map((block, index) => (
-              <NovelBlockView
-                block={block}
-                embeddedImages={readerContent.embeddedImages}
-                fontSize={fontSize}
+              <View
                 key={`${block.type}-${index}`}
-                lineHeight={lineHeight}
-                palette={palette}
-                styles={styles}
-              />
+                onLayout={(event) => {
+                  blockOffsetsRef.current[index] = event.nativeEvent.layout.y;
+                }}
+                style={
+                  activeSearchBlockIndex === index
+                    ? styles.searchHitBlock
+                    : undefined
+                }
+              >
+                <NovelBlockView
+                  block={block}
+                  embeddedImages={readerContent.embeddedImages}
+                  fontSize={fontSize}
+                  lineHeight={lineHeight}
+                  palette={palette}
+                  styles={styles}
+                />
+              </View>
             ))}
           </View>
 
@@ -911,6 +1072,36 @@ export default function NovelReaderScreen() {
             <Text style={styles.readerEndText}>読了</Text>
           </View>
 
+          {seriesId ? (
+            <SeriesNavigationSection
+              currentIndex={adjacentSeries.currentIndex}
+              error={seriesError}
+              isLoading={isSeriesLoading}
+              nextNovel={adjacentSeries.next}
+              onNext={() => {
+                if (adjacentSeries.next) {
+                  openSeriesNovel(adjacentSeries.next);
+                }
+              }}
+              onOpenList={() => {
+                setIsSeriesVisible(true);
+              }}
+              onPrevious={() => {
+                if (adjacentSeries.previous) {
+                  openSeriesNovel(adjacentSeries.previous);
+                }
+              }}
+              onRetry={() => {
+                setSeriesAttempt((current) => current + 1);
+              }}
+              palette={palette}
+              previousNovel={adjacentSeries.previous}
+              seriesTitle={seriesTitle || series?.title || 'シリーズ'}
+              styles={styles}
+              total={seriesNovels.length}
+            />
+          ) : null}
+
           <RecommendationSection
             emptyText="似ている作品は見つからなかったよ"
             error={relatedError}
@@ -921,10 +1112,9 @@ export default function NovelReaderScreen() {
             onNovelPress={(relatedNovel) => {
               router.push({
                 pathname: '/novel/[id]',
-                params: {
-                  bookmarked: relatedNovel.isBookmarked ? '1' : '0',
-                  id: String(relatedNovel.id),
-                },
+                params: buildReaderRouteParams(relatedNovel.id, {
+                  bookmarked: relatedNovel.isBookmarked,
+                }),
               });
             }}
             onRetry={() => {
@@ -947,10 +1137,9 @@ export default function NovelReaderScreen() {
             onNovelPress={(discoveryNovel) => {
               router.push({
                 pathname: '/novel/[id]',
-                params: {
-                  bookmarked: discoveryNovel.isBookmarked ? '1' : '0',
-                  id: String(discoveryNovel.id),
-                },
+                params: buildReaderRouteParams(discoveryNovel.id, {
+                  bookmarked: discoveryNovel.isBookmarked,
+                }),
               });
             }}
             onRetry={() => {
@@ -982,6 +1171,52 @@ export default function NovelReaderScreen() {
         </View>
       )}
 
+      <ReaderNavigationModal
+        accent={palette.accent}
+        background={palette.toolbar}
+        border={palette.border}
+        matches={searchMatches}
+        mode={navigationMode}
+        muted={palette.muted}
+        onClose={() => {
+          setIsNavigatorVisible(false);
+        }}
+        onModeChange={setNavigationMode}
+        onQueryChange={(query) => {
+          setSearchQuery(query);
+          setActiveSearchMatchIndex(-1);
+        }}
+        onSelectMatch={selectSearchMatch}
+        onSelectToc={selectTocEntry}
+        overlay={palette.overlay}
+        query={searchQuery}
+        text={palette.text}
+        toc={tocEntries}
+        visible={isNavigatorVisible}
+      />
+
+      <NovelSeriesModal
+        accent={palette.accent}
+        background={palette.toolbar}
+        border={palette.border}
+        currentNovelId={novelId}
+        error={seriesError}
+        isLoading={isSeriesLoading}
+        muted={palette.muted}
+        novels={seriesNovels}
+        onClose={() => {
+          setIsSeriesVisible(false);
+        }}
+        onNovelPress={openSeriesNovel}
+        onRetry={() => {
+          setSeriesAttempt((current) => current + 1);
+        }}
+        overlay={palette.overlay}
+        seriesTitle={seriesTitle || series?.title || 'シリーズ'}
+        text={palette.text}
+        visible={isSeriesVisible}
+      />
+
       <ReaderSettingsModal
         onChange={updateSettings}
         onClose={() => {
@@ -1006,6 +1241,17 @@ export default function NovelReaderScreen() {
         onClose={() => {
           setIsMoreVisible(false);
         }}
+        hasSeries={seriesId !== null}
+        offlineImageProgress={offlineImageProgress}
+        onOpenNavigator={() => {
+          setIsMoreVisible(false);
+          setNavigationMode('toc');
+          requestAnimationFrame(() => setIsNavigatorVisible(true));
+        }}
+        onOpenSeries={() => {
+          setIsMoreVisible(false);
+          requestAnimationFrame(() => setIsSeriesVisible(true));
+        }}
         onOpenDetail={() => {
           setIsMoreVisible(false);
 
@@ -1017,17 +1263,14 @@ export default function NovelReaderScreen() {
           }
 
           requestAnimationFrame(() => {
-            if (openedFromDetail) {
+            if (resolveReaderDetailAction(openedFromDetail) === 'back') {
               router.back();
               return;
             }
 
             router.push({
               pathname: '/novel/detail/[id]',
-              params: {
-                bookmarked: bookmarkState.value ? '1' : '0',
-                id: String(novelId),
-              },
+              params: buildDetailRouteParams(novelId, bookmarkState.value),
             });
           });
         }}
@@ -1060,6 +1303,135 @@ export default function NovelReaderScreen() {
         visible={isMoreVisible}
       />
     </SafeAreaView>
+  );
+}
+
+interface SeriesNavigationSectionProps {
+  currentIndex: number;
+  error: string | null;
+  isLoading: boolean;
+  nextNovel: PixivNovelItem | null;
+  onNext: () => void;
+  onOpenList: () => void;
+  onPrevious: () => void;
+  onRetry: () => void;
+  palette: ReaderPalette;
+  previousNovel: PixivNovelItem | null;
+  seriesTitle: string;
+  styles: ReturnType<typeof createStyles>;
+  total: number;
+}
+
+function SeriesNavigationSection({
+  currentIndex,
+  error,
+  isLoading,
+  nextNovel,
+  onNext,
+  onOpenList,
+  onPrevious,
+  onRetry,
+  palette,
+  previousNovel,
+  seriesTitle,
+  styles,
+  total,
+}: SeriesNavigationSectionProps) {
+  return (
+    <View style={styles.seriesSection}>
+      <View style={styles.seriesHeadingRow}>
+        <View style={styles.seriesHeadingText}>
+          <Text style={styles.relatedEyebrow}>SERIES</Text>
+          <Text numberOfLines={2} style={styles.seriesSectionTitle}>
+            {seriesTitle}
+          </Text>
+        </View>
+        {currentIndex >= 0 && total > 0 ? (
+          <Text style={styles.relatedCount}>
+            {currentIndex + 1}/{total}話
+          </Text>
+        ) : null}
+      </View>
+
+      {isLoading ? (
+        <View style={styles.seriesLoading}>
+          <ActivityIndicator color={palette.accent} />
+          <Text style={styles.relatedMuted}>シリーズを読み込んでる…</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.seriesCompleteCard}>
+          <Text style={styles.seriesCompleteTitle}>
+            シリーズを読み込めなかった
+          </Text>
+          <Text numberOfLines={3} style={styles.relatedMuted}>
+            {error}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onRetry}
+            style={({ pressed }) => [
+              styles.seriesRetryButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.seriesRetryText}>もう一度読み込む</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <>
+          {nextNovel ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={onNext}
+              style={({ pressed }) => [
+                styles.nextEpisodeButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.nextEpisodeText}>
+                <Text style={styles.nextEpisodeLabel}>次の話を読む</Text>
+                <Text numberOfLines={2} style={styles.nextEpisodeTitle}>
+                  {nextNovel.title}
+                </Text>
+              </View>
+              <Text style={styles.nextEpisodeArrow}>›</Text>
+            </Pressable>
+          ) : (
+            <View style={styles.seriesCompleteCard}>
+              <Text style={styles.seriesCompleteTitle}>シリーズ最新話まで読了</Text>
+              <Text style={styles.relatedMuted}>
+                新しい話が追加されたらシリーズ一覧から確認できる。
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.seriesActionRow}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={!previousNovel}
+              onPress={onPrevious}
+              style={({ pressed }) => [
+                styles.seriesSubButton,
+                !previousNovel && styles.seriesSubButtonDisabled,
+                pressed && previousNovel && styles.pressed,
+              ]}
+            >
+              <Text style={styles.seriesSubButtonText}>‹ 前の話</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={onOpenList}
+              style={({ pressed }) => [
+                styles.seriesSubButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.seriesSubButtonText}>全話一覧</Text>
+            </Pressable>
+          </View>
+        </>
+      )}
+    </View>
   );
 }
 
@@ -1344,12 +1716,16 @@ function NovelBlockView({
       return (
         <Image
           contentFit="contain"
-          source={{
-            uri,
-            headers: {
-              Referer: 'https://www.pixiv.net/',
-            },
-          }}
+          source={
+            uri.startsWith('file:')
+              ? { uri }
+              : {
+                  uri,
+                  headers: {
+                    Referer: 'https://www.pixiv.net/',
+                  },
+                }
+          }
           style={[styles.embeddedImage, { backgroundColor: palette.toolbar }]}
           transition={180}
         />
@@ -1532,11 +1908,15 @@ function RadioOption({ active, label, onPress, palette }: RadioOptionProps) {
 }
 
 interface MoreActionsModalProps {
+  hasSeries: boolean;
   isOfflineLoading: boolean;
   isOfflineSaved: boolean;
+  offlineImageProgress: string | null;
   onClose: () => void;
   onOpenDetail: () => void;
+  onOpenNavigator: () => void;
   onOpenPixiv: () => void;
+  onOpenSeries: () => void;
   onOpenSettings: () => void;
   onReload: () => void;
   onReturn: () => void;
@@ -1547,11 +1927,15 @@ interface MoreActionsModalProps {
 }
 
 function MoreActionsModal({
+  hasSeries,
   isOfflineLoading,
   isOfflineSaved,
+  offlineImageProgress,
   onClose,
   onOpenDetail,
+  onOpenNavigator,
   onOpenPixiv,
+  onOpenSeries,
   onOpenSettings,
   onReload,
   onReturn,
@@ -1584,6 +1968,18 @@ function MoreActionsModal({
             palette={palette}
           />
           <SheetAction
+            label="目次・本文内検索"
+            onPress={onOpenNavigator}
+            palette={palette}
+          />
+          {hasSeries ? (
+            <SheetAction
+              label="シリーズ一覧"
+              onPress={onOpenSeries}
+              palette={palette}
+            />
+          ) : null}
+          <SheetAction
             label="作品詳細を開く"
             onPress={onOpenDetail}
             palette={palette}
@@ -1591,9 +1987,10 @@ function MoreActionsModal({
           <SheetAction
             disabled={isOfflineLoading}
             label={
-              isOfflineSaved
+              offlineImageProgress ??
+              (isOfflineSaved
                 ? 'オフライン保存を削除'
-                : '本文をオフライン保存'
+                : '本文と挿絵をオフライン保存')
             }
             onPress={onToggleOffline}
             palette={palette}
@@ -1791,6 +2188,13 @@ function createStyles(palette: ReaderPalette) {
     novelBody: {
       gap: 28,
     },
+    searchHitBlock: {
+      marginHorizontal: -10,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderRadius: 10,
+      backgroundColor: `${palette.accent}18`,
+    },
     bodyText: {
       color: palette.text,
       fontFamily: Platform.select({
@@ -1860,6 +2264,113 @@ function createStyles(palette: ReaderPalette) {
       color: palette.muted,
       fontSize: 12,
       letterSpacing: 3,
+    },
+    seriesSection: {
+      gap: 16,
+      marginTop: 52,
+      paddingTop: 28,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: palette.border,
+    },
+    seriesHeadingRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      justifyContent: 'space-between',
+      gap: 14,
+    },
+    seriesHeadingText: {
+      flex: 1,
+      gap: 3,
+    },
+    seriesSectionTitle: {
+      color: palette.text,
+      fontSize: 19,
+      fontWeight: '800',
+      lineHeight: 26,
+    },
+    seriesLoading: {
+      minHeight: 80,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 10,
+    },
+    nextEpisodeButton: {
+      minHeight: 86,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      padding: 16,
+      borderRadius: 16,
+      backgroundColor: palette.accent,
+    },
+    nextEpisodeText: {
+      flex: 1,
+      gap: 5,
+    },
+    nextEpisodeLabel: {
+      color: '#FFFFFF',
+      fontSize: 11,
+      fontWeight: '900',
+      letterSpacing: 1,
+    },
+    nextEpisodeTitle: {
+      color: '#FFFFFF',
+      fontSize: 16,
+      fontWeight: '900',
+      lineHeight: 23,
+    },
+    nextEpisodeArrow: {
+      color: '#FFFFFF',
+      fontSize: 32,
+    },
+    seriesCompleteCard: {
+      gap: 7,
+      padding: 16,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.border,
+      borderRadius: 16,
+      backgroundColor: palette.toolbar,
+    },
+    seriesCompleteTitle: {
+      color: palette.text,
+      fontSize: 14,
+      fontWeight: '900',
+    },
+    seriesRetryButton: {
+      alignSelf: 'flex-start',
+      minHeight: 38,
+      justifyContent: 'center',
+      paddingHorizontal: 15,
+      borderRadius: 19,
+      backgroundColor: palette.accent,
+    },
+    seriesRetryText: {
+      color: '#FFFFFF',
+      fontSize: 11,
+      fontWeight: '900',
+    },
+    seriesActionRow: {
+      flexDirection: 'row',
+      gap: 10,
+    },
+    seriesSubButton: {
+      flex: 1,
+      minHeight: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.border,
+      borderRadius: 12,
+      backgroundColor: palette.toolbar,
+    },
+    seriesSubButtonDisabled: {
+      opacity: 0.38,
+    },
+    seriesSubButtonText: {
+      color: palette.text,
+      fontSize: 12,
+      fontWeight: '800',
     },
     relatedSection: {
       gap: 18,

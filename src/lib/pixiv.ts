@@ -5,6 +5,7 @@ import {
   PixivClient,
   SearchSort,
   SearchTarget,
+  type NovelSeriesDetail,
   type PixivError,
   type PixivNovelItem,
 } from '@book000/pixivts';
@@ -34,6 +35,12 @@ export interface PixivSession {
 export interface NovelPageResult {
   novels: PixivNovelItem[];
   nextUrl: string | null;
+  refreshToken: string;
+}
+
+export interface NovelSeriesResult {
+  detail: NovelSeriesDetail;
+  novels: PixivNovelItem[];
   refreshToken: string;
 }
 
@@ -231,6 +238,56 @@ export async function fetchRelatedNovels(
   return {
     novels: result.value.novels,
     nextUrl: result.value.nextUrl,
+    refreshToken: client.getRefreshToken(),
+  };
+}
+
+/** シリーズ作品を全ページ取得し、前後移動と一覧表示に使う。 */
+export async function fetchNovelSeries(
+  seriesId: number,
+): Promise<NovelSeriesResult> {
+  const client = requireClient();
+  const novels: PixivNovelItem[] = [];
+  const seenIds = new Set<number>();
+  let lastOrder: number | undefined;
+  let detail: NovelSeriesDetail | null = null;
+
+  for (let pageNumber = 0; pageNumber < 200; pageNumber += 1) {
+    const result = await client.novels.series({ seriesId, lastOrder });
+
+    if (result.isErr) {
+      throw new Error(formatPixivError(result.error));
+    }
+
+    detail ??= result.value.novelSeriesDetail;
+
+    for (const novel of result.value.novels) {
+      if (!seenIds.has(novel.id)) {
+        seenIds.add(novel.id);
+        novels.push(novel);
+      }
+    }
+
+    if (!result.value.nextUrl) {
+      break;
+    }
+
+    const cursor = parseNextUrl(result.value.nextUrl);
+
+    if (cursor.lastOrder === undefined || cursor.lastOrder === lastOrder) {
+      break;
+    }
+
+    lastOrder = cursor.lastOrder;
+  }
+
+  if (!detail) {
+    throw new Error('シリーズ情報を取得できなかったよ');
+  }
+
+  return {
+    detail,
+    novels,
     refreshToken: client.getRefreshToken(),
   };
 }

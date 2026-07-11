@@ -1,6 +1,7 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
 
+import { deleteNovelOfflineAssets } from '@/lib/offline-assets';
 import type { NovelReaderContent } from '@/lib/pixiv';
 
 const DATABASE_NAME = 'pixiv-novel-reader.db';
@@ -226,6 +227,22 @@ export async function saveOfflineNovel(
   await recordNovelOpened(detail);
 }
 
+/** 保存済み本文を触らず、ブックマーク数など作品情報だけ更新する。 */
+export async function updateOfflineNovelDetail(
+  detail: PixivNovelItem,
+): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(
+    `
+      UPDATE offline_novels
+      SET detail_json = ?
+      WHERE novel_id = ?
+    `,
+    JSON.stringify(detail),
+    detail.id,
+  );
+}
+
 export async function getOfflineNovel(
   novelId: number,
 ): Promise<OfflineNovelRecord | null> {
@@ -262,6 +279,7 @@ export async function deleteOfflineNovel(novelId: number): Promise<void> {
     'DELETE FROM offline_novels WHERE novel_id = ?',
     novelId,
   );
+  await deleteNovelOfflineAssets(novelId).catch(() => {});
 }
 
 export async function listOfflineNovels(limit = 100): Promise<LibraryNovel[]> {
