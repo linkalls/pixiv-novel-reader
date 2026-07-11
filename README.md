@@ -1,44 +1,93 @@
 # Pixiv Novel Reader
 
-Expo 57 + TypeScript + Bunで作るPixiv小説リーダー。
-現在は`@book000/pixivts`がReact Native / ExpoのAndroid bundleへ組み込めることを確認するための疎通テスト段階。
+[![Android APK](https://github.com/linkalls/pixiv-novel-reader/actions/workflows/android-apk.yml/badge.svg)](https://github.com/linkalls/pixiv-novel-reader/actions/workflows/android-apk.yml)
 
-## 現在できること
+Expo 57・React Native・TypeScript・Bunで作った、Pixiv小説に特化したAndroidリーダー。
 
-- アプリ内WebViewからPixivへログイン
-- PKCEのauthorization codeをrefresh tokenへ交換
-- Pixiv refresh tokenを`expo-secure-store`へ保存
-- `@book000/pixivts`でPixivへログイン
-- 小説デイリーランキングの先頭ページを取得
-- 上位10作品のタイトル、作者、文字数、ブックマーク数を表示
+## 主な機能
 
-## 起動
+- アプリ内WebViewによるPixiv OAuthログイン
+- refresh tokenのSecureStore保存と自動再接続
+- おすすめ小説
+- 公開・非公開マイブックマーク
+- 通常・R-18を含む小説ランキング
+- キーワード、タグ、タイトル・説明からの小説検索
+- 新着順、古い順、人気順の切り替え
+- 作品詳細、タグ、閲覧数、ブックマーク数の表示
+- ブックマーク追加・解除
+- Pixiv WebのAjax JSON APIを優先利用するネイティブ本文リーダー
+- Ajax取得失敗時のApp APIフォールバック
+- 端末追従・ライト固定・ダーク固定のテーマ切り替え
+- ページネーション、引っ張って更新
+- ログイン後は認証UIを隠し、設定画面にはログアウトだけを表示
+
+## 開発
+
+必要なもの：
+
+- Bun 1.3.14+
+- Node.js 22+
+- Java 17
+- Android SDK 36
+- Android NDK 27.1.12297006
+
+依存関係をインストールする：
 
 ```bash
-cd ~/Apps/pixiv-novel-reader
-bun install
+bun install --frozen-lockfile
+```
+
+Expo開発サーバーを起動する：
+
+```bash
 bun run start
 ```
 
-Androidを直接開く場合：
-
-```bash
-bun run android
-```
-
-## 検証
+型・Lint・本文パーサーテスト・Expo構成を確認する：
 
 ```bash
 bun run check
 ```
 
-Android向けMetro bundleを生成する場合：
+## APKのローカルビルド
+
+`app.json`からAndroidプロジェクトを再生成し、arm64-v8a向けRelease APKを作る：
 
 ```bash
-bunx expo export --platform android --output-dir dist-android --clear
+bun run android:apk
 ```
+
+成果物：
+
+```text
+dist-android/pixiv-novel-reader-v<version>-arm64.apk
+dist-android/pixiv-novel-reader-v<version>-arm64.apk.sha256
+```
+
+Release APKは現在、配布・動作確認用としてAndroidのdebug keystoreで署名する。Play Store公開時は専用のrelease keystoreへ切り替える。
+
+## GitHub Actions
+
+`.github/workflows/android-apk.yml`が次のタイミングで自動ビルドする：
+
+- `main`へのpush
+- `main`向けPull Request
+- Actions画面からの手動実行
+- `v*`タグのpush
+
+通常ビルドではAPKとSHA-256をActions Artifactへ30日間保存する。`v1.2.0`のようなタグをpushすると、同じ成果物をGitHub Releaseへ自動添付する。
+
+```bash
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+タグのバージョンと`app.json`の`expo.version`が一致しない場合、誤配布防止のためReleaseを失敗させる。
 
 ## 認証情報
 
-refresh tokenはソースコードや`.env`へ直書きせず、アプリ上で入力する。
-入力されたtokenは端末のSecureStoreへ保存される。
+PixivのID・パスワードはPixivのWebViewへ直接入力され、アプリ側では受け取らない。端末へ保存するのはOAuthで取得したrefresh tokenだけで、ソースコードやGitHub Actionsへ認証情報を埋め込まない。
+
+## ライセンス
+
+[MIT](./LICENSE)

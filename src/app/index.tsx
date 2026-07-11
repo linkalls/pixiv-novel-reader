@@ -33,6 +33,7 @@ import {
   type NovelSearchSort,
   type NovelSearchTarget,
 } from '@/lib/pixiv';
+import { type AppColors, type ThemeMode, useAppTheme } from '@/theme';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 
@@ -87,7 +88,15 @@ const SEARCH_TARGET_OPTIONS: { value: NovelSearchTarget; label: string }[] = [
   { value: 'title_and_caption', label: 'タイトル・説明' },
 ];
 
+const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: 'system', label: '端末設定' },
+  { value: 'light', label: 'ライト' },
+  { value: 'dark', label: 'ダーク' },
+];
+
 export default function HomeScreen() {
+  const { colors, isDark, mode: themeMode, setMode: setThemeMode } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [activeTab, setActiveTab] = useState<AppTab>('recommended');
   const [feeds, setFeeds] = useState<Record<AppTab, FeedState>>({
     recommended: { ...EMPTY_FEED },
@@ -385,7 +394,7 @@ export default function HomeScreen() {
   if (isBooting) {
     return (
       <SafeAreaView style={styles.centeredScreen}>
-        <ActivityIndicator color="#0096FA" size="large" />
+        <ActivityIndicator color={colors.accent} size="large" />
         <Text style={styles.bootTitle}>Pixiv Novel Reader</Text>
         <Text style={styles.bootText}>保存済みログインを確認してる…</Text>
       </SafeAreaView>
@@ -430,7 +439,7 @@ export default function HomeScreen() {
                 ]}
               >
                 {isConnecting ? (
-                  <ActivityIndicator color="#FFFFFF" />
+                  <ActivityIndicator color={colors.onAccent} />
                 ) : (
                   <Text style={styles.loginButtonText}>Pixivでログイン</Text>
                 )}
@@ -462,9 +471,9 @@ export default function HomeScreen() {
                     editable={!isConnecting}
                     onChangeText={setManualToken}
                     placeholder="refresh tokenを貼り付け"
-                    placeholderTextColor="#8D96A0"
+                    placeholderTextColor={colors.placeholder}
                     secureTextEntry
-                    selectionColor="#0096FA"
+                    selectionColor={colors.accent}
                     style={styles.input}
                     value={manualToken}
                   />
@@ -621,7 +630,7 @@ export default function HomeScreen() {
         onEndReachedThreshold={0.35}
         refreshControl={
           <RefreshControl
-            colors={['#0096FA']}
+            colors={[colors.accent]}
             onRefresh={() => {
               if (activeTab === 'search' && !submittedSearchWord) {
                 return;
@@ -630,7 +639,7 @@ export default function HomeScreen() {
               void requestFeed(activeTab);
             }}
             refreshing={activeFeed.isLoading && activeFeed.hasLoaded}
-            tintColor="#0096FA"
+            tintColor={colors.accent}
           />
         }
         renderItem={({ item, index }) => (
@@ -676,6 +685,23 @@ export default function HomeScreen() {
             </Text>
             <Text style={styles.settingsNote}>
               ログアウトすると、端末に保存した認証情報を削除するよ。
+            </Text>
+            <View style={styles.settingsDivider} />
+            <Text style={styles.settingsSectionTitle}>表示テーマ</Text>
+            <View style={styles.chipRow}>
+              {THEME_OPTIONS.map((option) => (
+                <FilterChip
+                  active={themeMode === option.value}
+                  key={option.value}
+                  label={option.label}
+                  onPress={() => {
+                    setThemeMode(option.value);
+                  }}
+                />
+              ))}
+            </View>
+            <Text style={styles.themeStatus}>
+              現在は{isDark ? 'ダーク' : 'ライト'}表示
             </Text>
             <Pressable
               accessibilityRole="button"
@@ -725,6 +751,9 @@ function FeedControls({
   onSearchTargetChange,
   onSearch,
 }: FeedControlsProps) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   if (activeTab === 'recommended') {
     return (
       <View style={styles.feedIntro}>
@@ -793,9 +822,9 @@ function FeedControls({
           onChangeText={setSearchWord}
           onSubmitEditing={onSearch}
           placeholder="タイトル・タグ・キーワード"
-          placeholderTextColor="#89949E"
+          placeholderTextColor={colors.placeholder}
           returnKeyType="search"
-          selectionColor="#0096FA"
+          selectionColor={colors.accent}
           style={styles.searchInput}
           value={searchWord}
         />
@@ -860,6 +889,9 @@ function FilterChip({
   label: string;
   onPress: () => void;
 }) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   return (
     <Pressable
       accessibilityRole="button"
@@ -889,10 +921,13 @@ function EmptyFeed({
   isLoading: boolean;
   tab: AppTab;
 }) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   if (isLoading) {
     return (
       <View style={styles.emptyState}>
-        <ActivityIndicator color="#0096FA" size="large" />
+        <ActivityIndicator color={colors.accent} size="large" />
         <Text style={styles.emptyTitle}>小説を読み込んでる…</Text>
       </View>
     );
@@ -934,10 +969,13 @@ function FeedFooter({
   isLoadingMore: boolean;
   onLoadMore: () => void;
 }) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   if (isLoadingMore) {
     return (
       <View style={styles.footerLoading}>
-        <ActivityIndicator color="#0096FA" />
+        <ActivityIndicator color={colors.accent} />
         <Text style={styles.footerText}>続きを読み込んでる…</Text>
       </View>
     );
@@ -962,6 +1000,8 @@ function FeedFooter({
 }
 
 function ListSeparator() {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   return <View style={styles.separator} />;
 }
 
@@ -982,7 +1022,8 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: AppColors) {
+  return StyleSheet.create({
   flex: {
     flex: 1,
   },
@@ -992,21 +1033,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
     paddingHorizontal: 28,
-    backgroundColor: '#F4F7FA',
+    backgroundColor: colors.background,
   },
   bootTitle: {
     marginTop: 6,
-    color: '#20262E',
+    color: colors.text,
     fontSize: 20,
     fontWeight: '900',
   },
   bootText: {
-    color: '#697580',
+    color: colors.textMuted,
     fontSize: 13,
   },
   loginSafeArea: {
     flex: 1,
-    backgroundColor: '#F4F7FA',
+    backgroundColor: colors.background,
   },
   loginContent: {
     width: '100%',
@@ -1021,20 +1062,20 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   eyebrow: {
-    color: '#0096FA',
+    color: colors.accent,
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 1.5,
   },
   loginTitle: {
-    color: '#20262E',
+    color: colors.text,
     fontSize: 31,
     fontWeight: '900',
     letterSpacing: -0.8,
     lineHeight: 41,
   },
   loginDescription: {
-    color: '#63707C',
+    color: colors.textSecondary,
     fontSize: 15,
     lineHeight: 24,
   },
@@ -1042,20 +1083,20 @@ const styles = StyleSheet.create({
     gap: 14,
     padding: 20,
     borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#17212B',
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 5 },
     shadowOpacity: 0.08,
     shadowRadius: 18,
     elevation: 3,
   },
   loginCardTitle: {
-    color: '#303842',
+    color: colors.text,
     fontSize: 20,
     fontWeight: '900',
   },
   loginCardDescription: {
-    color: '#65717D',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 21,
   },
@@ -1064,20 +1105,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 15,
-    backgroundColor: '#0096FA',
+    backgroundColor: colors.accent,
   },
   loginButtonText: {
-    color: '#FFFFFF',
+    color: colors.onAccent,
     fontSize: 16,
     fontWeight: '900',
   },
   authErrorCard: {
     padding: 13,
     borderRadius: 12,
-    backgroundColor: '#FFF0F2',
+    backgroundColor: colors.dangerSoft,
   },
   authErrorText: {
-    color: '#C73848',
+    color: colors.danger,
     fontSize: 12,
     lineHeight: 19,
   },
@@ -1086,7 +1127,7 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   manualToggleText: {
-    color: '#75818C',
+    color: colors.textMuted,
     fontSize: 12,
     fontWeight: '700',
   },
@@ -1097,10 +1138,10 @@ const styles = StyleSheet.create({
     minHeight: 50,
     paddingHorizontal: 15,
     borderWidth: 1,
-    borderColor: '#D7E0E7',
+    borderColor: colors.border,
     borderRadius: 13,
-    backgroundColor: '#F9FBFC',
-    color: '#20262E',
+    backgroundColor: colors.input,
+    color: colors.text,
     fontSize: 14,
   },
   manualButton: {
@@ -1108,16 +1149,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 13,
-    backgroundColor: '#35404A',
+    backgroundColor: colors.neutralButton,
   },
   manualButtonText: {
-    color: '#FFFFFF',
+    color: colors.onAccent,
     fontSize: 14,
     fontWeight: '800',
   },
   appSafeArea: {
     flex: 1,
-    backgroundColor: '#F4F7FA',
+    backgroundColor: colors.background,
   },
   appHeader: {
     flexDirection: 'row',
@@ -1132,13 +1173,13 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   appEyebrow: {
-    color: '#0096FA',
+    color: colors.accent,
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1.3,
   },
   appTitle: {
-    color: '#20262E',
+    color: colors.text,
     fontSize: 24,
     fontWeight: '900',
     letterSpacing: -0.4,
@@ -1149,10 +1190,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 14,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   settingsButtonText: {
-    color: '#43505C',
+    color: colors.textSecondary,
     fontSize: 21,
   },
   tabBar: {
@@ -1162,7 +1203,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     padding: 5,
     borderRadius: 17,
-    backgroundColor: '#E6EDF3',
+    backgroundColor: colors.surfaceAlt,
   },
   tabButton: {
     flex: 1,
@@ -1175,8 +1216,8 @@ const styles = StyleSheet.create({
     borderRadius: 13,
   },
   tabButtonActive: {
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#1B2732',
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.07,
     shadowRadius: 6,
@@ -1186,12 +1227,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   tabLabel: {
-    color: '#6D7984',
+    color: colors.textMuted,
     fontSize: 9,
     fontWeight: '800',
   },
   tabLabelActive: {
-    color: '#007FC9',
+    color: colors.accentStrong,
   },
   listContent: {
     width: '100%',
@@ -1212,12 +1253,12 @@ const styles = StyleSheet.create({
     paddingBottom: 17,
   },
   feedIntroTitle: {
-    color: '#303842',
+    color: colors.text,
     fontSize: 16,
     fontWeight: '900',
   },
   feedIntroText: {
-    color: '#71808C',
+    color: colors.textMuted,
     fontSize: 12,
     lineHeight: 18,
   },
@@ -1228,7 +1269,7 @@ const styles = StyleSheet.create({
     paddingBottom: 17,
   },
   controlLabel: {
-    color: '#52606C',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '800',
   },
@@ -1244,21 +1285,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 9,
     borderWidth: 1,
-    borderColor: '#D5DFE7',
+    borderColor: colors.border,
     borderRadius: 999,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   filterChipActive: {
-    borderColor: '#0096FA',
-    backgroundColor: '#0096FA',
+    borderColor: colors.accent,
+    backgroundColor: colors.accent,
   },
   filterChipText: {
-    color: '#62707C',
+    color: colors.textMuted,
     fontSize: 12,
     fontWeight: '800',
   },
   filterChipTextActive: {
-    color: '#FFFFFF',
+    color: colors.onAccent,
   },
   searchControls: {
     gap: 10,
@@ -1274,10 +1315,10 @@ const styles = StyleSheet.create({
     minHeight: 50,
     paddingHorizontal: 15,
     borderWidth: 1,
-    borderColor: '#D5DFE7',
+    borderColor: colors.border,
     borderRadius: 14,
-    backgroundColor: '#FFFFFF',
-    color: '#20262E',
+    backgroundColor: colors.surface,
+    color: colors.text,
     fontSize: 14,
   },
   searchButton: {
@@ -1285,15 +1326,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 14,
-    backgroundColor: '#0096FA',
+    backgroundColor: colors.accent,
   },
   searchButtonText: {
-    color: '#FFFFFF',
+    color: colors.onAccent,
     fontSize: 14,
     fontWeight: '900',
   },
   premiumNote: {
-    color: '#8B6A00',
+    color: colors.warning,
     fontSize: 11,
   },
   emptyState: {
@@ -1308,13 +1349,13 @@ const styles = StyleSheet.create({
     fontSize: 34,
   },
   emptyTitle: {
-    color: '#303842',
+    color: colors.text,
     fontSize: 17,
     fontWeight: '900',
     textAlign: 'center',
   },
   emptyText: {
-    color: '#72808C',
+    color: colors.textMuted,
     fontSize: 13,
     lineHeight: 20,
     textAlign: 'center',
@@ -1327,7 +1368,7 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
   },
   footerText: {
-    color: '#72808C',
+    color: colors.textMuted,
     fontSize: 12,
   },
   footerSpace: {
@@ -1338,12 +1379,12 @@ const styles = StyleSheet.create({
     marginTop: 15,
     paddingVertical: 14,
     borderWidth: 1,
-    borderColor: '#A9DDFC',
+    borderColor: colors.border,
     borderRadius: 14,
-    backgroundColor: '#F1FAFF',
+    backgroundColor: colors.accentSoft,
   },
   loadMoreText: {
-    color: '#0088DD',
+    color: colors.accentStrong,
     fontSize: 13,
     fontWeight: '900',
   },
@@ -1352,7 +1393,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
-    backgroundColor: 'rgba(17, 26, 35, 0.48)',
+    backgroundColor: colors.overlay,
   },
   settingsCard: {
     width: '100%',
@@ -1360,22 +1401,36 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 22,
     borderRadius: 22,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   settingsTitle: {
-    color: '#20262E',
+    color: colors.text,
     fontSize: 20,
     fontWeight: '900',
   },
   settingsDescription: {
-    color: '#52606C',
+    color: colors.textSecondary,
     fontSize: 14,
     fontWeight: '700',
   },
   settingsNote: {
-    color: '#7B8792',
+    color: colors.textMuted,
     fontSize: 12,
     lineHeight: 19,
+  },
+  settingsDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 2,
+    backgroundColor: colors.border,
+  },
+  settingsSectionTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  themeStatus: {
+    color: colors.textMuted,
+    fontSize: 11,
   },
   logoutButton: {
     minHeight: 49,
@@ -1383,10 +1438,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 6,
     borderRadius: 14,
-    backgroundColor: '#FFF0F2',
+    backgroundColor: colors.dangerSoft,
   },
   logoutButtonText: {
-    color: '#D13C4D',
+    color: colors.danger,
     fontSize: 14,
     fontWeight: '900',
   },
@@ -1396,4 +1451,5 @@ const styles = StyleSheet.create({
   disabled: {
     opacity: 0.52,
   },
-});
+  });
+}

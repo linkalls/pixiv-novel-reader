@@ -37,6 +37,42 @@ export interface NovelPageResult {
   refreshToken: string;
 }
 
+export interface NovelReaderContent {
+  id: string;
+  title: string | null;
+  seriesTitle: string | null;
+  text: string;
+  embeddedImages: Record<string, string>;
+}
+
+interface PixivAjaxNovelImage {
+  urls?: unknown;
+}
+
+interface PixivAjaxNovelBody {
+  id?: unknown;
+  title?: unknown;
+  content?: unknown;
+  seriesTitle?: unknown;
+  seriesNavData?: unknown;
+  textEmbeddedImages?: unknown;
+}
+
+interface PixivAjaxNovelEnvelope {
+  error?: unknown;
+  message?: unknown;
+  body?: unknown;
+}
+
+interface EmbeddedNovelPayload {
+  id?: unknown;
+  title?: unknown;
+  seriesTitle?: unknown;
+  text?: unknown;
+  images?: unknown;
+  illusts?: unknown;
+}
+
 let currentClient: PixivClient | null = null;
 
 /**
@@ -181,7 +217,13 @@ export async function fetchNovelDetail(
   return result.value.novel;
 }
 
-export async function fetchNovelText(novelId: number): Promise<string> {
+/**
+ * App APIのWebView HTMLから本文を取得するフォールバック。
+ * 通常はWebView cookieを利用した `/ajax/novel/{id}` を先に試す。
+ */
+export async function fetchNovelText(
+  novelId: number,
+): Promise<NovelReaderContent> {
   const client = requireClient();
   const result = await client.novels.text({ novelId });
 
@@ -189,7 +231,7 @@ export async function fetchNovelText(novelId: number): Promise<string> {
     throw new Error(formatPixivError(result.error));
   }
 
-  return result.value;
+  return parseNovelWebviewHtml(result.value, novelId);
 }
 
 export async function setNovelBookmark(
@@ -209,6 +251,231 @@ export async function setNovelBookmark(
   }
 
   return client.getRefreshToken();
+}
+
+/** `www.pixiv.net/ajax/novel/{id}` のJSONをリーダー用データへ変換する。 */
+export function parseNovelAjaxResponse(
+  rawResponse: string,
+  fallbackNovelId = 0,
+): NovelReaderContent {
+  let envelope: PixivAjaxNovelEnvelope;
+
+  try {
+    envelope = JSON.parse(rawResponse.trim()) as PixivAjaxNovelEnvelope;
+  } catch (error) {
+    throw new Error(
+      `PixivのAjax JSONを解析できなかったよ: ${toUnknownError(error)}`,
+    );
+  }
+
+  if (envelope.error !== false) {
+    const message =
+      typeof envelope.message === 'string' && envelope.message.trim().length > 0
+        ? envelope.message
+        : 'PixivのWebログインcookieを使えなかったよ';
+    throw new Error(message);
+  }
+
+  if (!isRecord(envelope.body)) {
+    throw new Error('PixivのAjaxレスポンスに本文データがなかったよ');
+  }
+
+  return parseAjaxNovelBody(envelope.body, fallbackNovelId);
+}
+
+/**
+ * App APIのWebViewレスポンスに埋め込まれた `novel: {...}` を取り出す。
+ * 単純な正規表現では本文中の波括弧や引用符で壊れるため、文字列を
+ * 認識しながら対応する閉じ括弧まで走査する。
+ */
+export function parseNovelWebviewHtml(
+  html: string,
+  fallbackNovelId = 0,
+): NovelReaderContent {
+  const markerIndex = html.search(/\bnovel\s*:/);
+
+  if (markerIndex < 0) {
+    throw new Error('Pixivの本文データが見つからなかったよ');
+  }
+
+  const objectStart = html.indexOf('{', markerIndex);
+
+  if (objectStart < 0) {
+    throw new Error('Pixivの本文JSONを読み取れなかったよ');
+  }
+
+  let depth = 0;
+  let isInsideString = false;
+  let isEscaped = false;
+  let objectEnd = -1;
+
+  for (let index = objectStart; index < html.length; index += 1) {
+    const character = html[index];
+
+    if (isInsideString) {
+      if (isEscaped) {
+        isEscaped = false;
+        continue;
+      }
+
+      if (character === '\\') {
+        isEscaped = true;
+        continue;
+      }
+
+      if (character === '"') {
+        isInsideString = false;
+      }
+
+      continue;
+    }
+
+    if (character === '"') {
+      isInsideString = true;
+      continue;
+    }
+
+    if (character === '{') {
+      depth += 1;
+      continue;
+    }
+
+    if (character === '}') {
+      depth -= 1;
+
+      if (depth === 0) {
+        objectEnd = index + 1;
+        break;
+      }
+    }
+  }
+
+  if (objectEnd < 0) {
+    throw new Error('Pixivの本文JSONが途中で切れてるよ');
+  }
+
+  let payload: EmbeddedNovelPayload;
+
+  try {
+    payload = JSON.parse(
+      html.slice(objectStart, objectEnd),
+    ) as EmbeddedNovelPayload;
+  } catch (error) {
+    throw new Error(
+      `Pixivの本文JSONを解析できなかったよ: ${toUnknownError(error)}`,
+    );
+  }
+
+  if (typeof payload.text !== 'string' || payload.text.trim().length === 0) {
+    throw new Error('この作品の本文が空だったよ');
+  }
+
+  return {
+    id:
+      typeof payload.id === 'string' || typeof payload.id === 'number'
+        ? String(payload.id)
+        : String(fallbackNovelId),
+    title: typeof payload.title === 'string' ? payload.title : null,
+    seriesTitle:
+      typeof payload.seriesTitle === 'string' ? payload.seriesTitle : null,
+    text: payload.text,
+    embeddedImages: collectLegacyEmbeddedImages(
+      payload.images,
+      payload.illusts,
+    ),
+  };
+}
+
+function parseAjaxNovelBody(
+  body: Record<string, unknown>,
+  fallbackNovelId: number,
+): NovelReaderContent {
+  const typedBody = body as PixivAjaxNovelBody;
+
+  if (
+    typeof typedBody.content !== 'string' ||
+    typedBody.content.trim().length === 0
+  ) {
+    throw new Error('PixivのAjaxレスポンス本文が空だったよ');
+  }
+
+  return {
+    id:
+      typeof typedBody.id === 'string' || typeof typedBody.id === 'number'
+        ? String(typedBody.id)
+        : String(fallbackNovelId),
+    title: typeof typedBody.title === 'string' ? typedBody.title : null,
+    seriesTitle: readAjaxSeriesTitle(typedBody),
+    text: typedBody.content,
+    embeddedImages: collectAjaxEmbeddedImages(typedBody.textEmbeddedImages),
+  };
+}
+
+function readAjaxSeriesTitle(body: PixivAjaxNovelBody): string | null {
+  if (typeof body.seriesTitle === 'string') {
+    return body.seriesTitle;
+  }
+
+  if (isRecord(body.seriesNavData)) {
+    const title = body.seriesNavData.title;
+    return typeof title === 'string' ? title : null;
+  }
+
+  return null;
+}
+
+function collectAjaxEmbeddedImages(value: unknown): Record<string, string> {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const result: Record<string, string> = {};
+
+  for (const [id, rawImage] of Object.entries(value)) {
+    if (!isRecord(rawImage)) {
+      continue;
+    }
+
+    const image = rawImage as PixivAjaxNovelImage;
+
+    if (!isRecord(image.urls)) {
+      continue;
+    }
+
+    for (const key of ['original', '1200x1200', '480mw', '128x128']) {
+      const candidate = image.urls[key];
+
+      if (typeof candidate === 'string' && candidate.length > 0) {
+        result[id] = candidate;
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
+function collectLegacyEmbeddedImages(
+  images: unknown,
+  illusts: unknown,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  let index = 0;
+
+  for (const value of [images, illusts]) {
+    if (!Array.isArray(value)) {
+      continue;
+    }
+
+    for (const candidate of value) {
+      if (typeof candidate === 'string' && candidate.length > 0) {
+        result[String(index)] = candidate;
+        index += 1;
+      }
+    }
+  }
+
+  return result;
 }
 
 function requireClient(): PixivClient {
@@ -282,4 +549,12 @@ function formatPixivError(error: PixivError): string {
     case 'network':
       return 'Pixivへの通信に失敗したよ。ネット接続を確認してね';
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -17,6 +17,7 @@ import {
   type PixivOAuthSession,
 } from '@/lib/pixiv-oauth';
 import { extractPixivAuthorizationCode } from '@/lib/pixiv-oauth-url';
+import { type AppColors, useAppTheme } from '@/theme';
 
 interface PixivLoginModalProps {
   onClose: () => void;
@@ -27,6 +28,8 @@ export function PixivLoginModal({
   onClose,
   onSuccess,
 }: PixivLoginModalProps) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [session, setSession] = useState<PixivOAuthSession | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isExchanging, setIsExchanging] = useState(false);
@@ -151,7 +154,7 @@ export function PixivLoginModal({
           </View>
         ) : session ? (
           <WebView
-            applicationNameForUserAgent="PixivNovelReader/1.1"
+            applicationNameForUserAgent="PixivNovelReader/1.2"
             domStorageEnabled
             javaScriptEnabled
             onError={({ nativeEvent }) => {
@@ -186,7 +189,7 @@ export function PixivLoginModal({
           />
         ) : (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator color="#0096FA" size="large" />
+            <ActivityIndicator color={colors.accent} size="large" />
             <Text style={styles.loadingText}>ログイン画面を準備中…</Text>
           </View>
         )}
@@ -194,7 +197,7 @@ export function PixivLoginModal({
         {isExchanging && (
           <View style={styles.exchangeOverlay}>
             <View style={styles.exchangeCard}>
-              <ActivityIndicator color="#0096FA" size="large" />
+              <ActivityIndicator color={colors.accent} size="large" />
               <Text style={styles.exchangeTitle}>ログイン処理中</Text>
               <Text style={styles.exchangeText}>
                 Pixivの認証コードをrefresh tokenへ交換してるよ
@@ -211,10 +214,11 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: AppColors) {
+  return StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   header: {
     minHeight: 70,
@@ -223,17 +227,17 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#D8E0E7',
-    backgroundColor: '#FFFFFF',
+    borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
   },
   closeButton: {
     paddingHorizontal: 10,
     paddingVertical: 9,
     borderRadius: 10,
-    backgroundColor: '#EDF2F6',
+    backgroundColor: colors.surfaceAlt,
   },
   closeButtonText: {
-    color: '#34404B',
+    color: colors.textSecondary,
     fontSize: 14,
     fontWeight: '700',
   },
@@ -242,12 +246,12 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   headerTitle: {
-    color: '#20262E',
+    color: colors.text,
     fontSize: 17,
     fontWeight: '800',
   },
   headerSubtitle: {
-    color: '#6B7680',
+    color: colors.textMuted,
     fontSize: 11,
   },
   loadingContainer: {
@@ -257,7 +261,7 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   loadingText: {
-    color: '#5D6974',
+    color: colors.textSecondary,
     fontSize: 14,
   },
   errorContainer: {
@@ -268,12 +272,12 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   errorTitle: {
-    color: '#252B33',
+    color: colors.text,
     fontSize: 21,
     fontWeight: '800',
   },
   errorMessage: {
-    color: '#69747E',
+    color: colors.textSecondary,
     fontSize: 14,
     lineHeight: 22,
     textAlign: 'center',
@@ -284,10 +288,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 13,
     borderRadius: 13,
-    backgroundColor: '#0096FA',
+    backgroundColor: colors.accent,
   },
   retryButtonText: {
-    color: '#FFFFFF',
+    color: colors.onAccent,
     fontSize: 14,
     fontWeight: '800',
   },
@@ -300,7 +304,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 28,
-    backgroundColor: 'rgba(14, 22, 30, 0.45)',
+    backgroundColor: colors.overlay,
   },
   exchangeCard: {
     width: '100%',
@@ -309,15 +313,15 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 24,
     borderRadius: 20,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   exchangeTitle: {
-    color: '#20262E',
+    color: colors.text,
     fontSize: 18,
     fontWeight: '800',
   },
   exchangeText: {
-    color: '#69747E',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 20,
     textAlign: 'center',
@@ -325,4 +329,5 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.72,
   },
-});
+  });
+}
