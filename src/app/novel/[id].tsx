@@ -54,7 +54,6 @@ import { emitNovelChanged } from '@/lib/novel-events';
 import {
   buildDetailRouteParams,
   buildReaderRouteParams,
-  resolveReaderDetailAction,
 } from '@/lib/reader-flow';
 import { cacheNovelForRoute } from '@/lib/novel-route-cache';
 import {
@@ -179,21 +178,16 @@ export default function NovelReaderScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     bookmarked?: string | string[];
-    fromDetail?: string | string[];
     id?: string | string[];
     resume?: string | string[];
   }>();
   const { colors, isDark: isAppDark } = useAppTheme();
   const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
-  const rawFromDetail = Array.isArray(params.fromDetail)
-    ? params.fromDetail[0]
-    : params.fromDetail;
   const rawResume = Array.isArray(params.resume)
     ? params.resume[0]
     : params.resume;
   const novelId = Number(rawId);
   const isValidNovelId = Number.isInteger(novelId) && novelId > 0;
-  const openedFromDetail = rawFromDetail === '1';
   const shouldResume = rawResume === '1';
   const routeBookmarkState = parseBookmarkRouteParam(params.bookmarked);
 
@@ -1263,11 +1257,8 @@ export default function NovelReaderScreen() {
           }
 
           requestAnimationFrame(() => {
-            if (resolveReaderDetailAction(openedFromDetail) === 'back') {
-              router.back();
-              return;
-            }
-
+            // 読書メニューから開いた詳細は、必ず読書画面の上へ積む。
+            // 詳細の戻る操作で一覧ではなく、元の読書位置へ戻れるようにする。
             router.push({
               pathname: '/novel/detail/[id]',
               params: buildDetailRouteParams(novelId, bookmarkState.value),

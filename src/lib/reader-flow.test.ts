@@ -3,7 +3,6 @@ import { describe, expect, test } from 'bun:test';
 import {
   buildDetailRouteParams,
   buildReaderRouteParams,
-  resolveReaderDetailAction,
 } from './reader-flow';
 
 describe('buildReaderRouteParams', () => {
@@ -11,12 +10,10 @@ describe('buildReaderRouteParams', () => {
     expect(
       buildReaderRouteParams(123, {
         bookmarked: true,
-        fromDetail: true,
         resume: true,
       }),
     ).toEqual({
       bookmarked: '1',
-      fromDetail: '1',
       id: '123',
       resume: '1',
     });
@@ -30,12 +27,7 @@ describe('buildReaderRouteParams', () => {
 });
 
 describe('reader detail flow', () => {
-  test('詳細から読書へ来た場合は既存詳細へ戻る', () => {
-    expect(resolveReaderDetailAction(true)).toBe('back');
-  });
-
-  test('履歴から直接読書へ来た場合は詳細を新しく開く', () => {
-    expect(resolveReaderDetailAction(false)).toBe('push');
+  test('読書メニューから積む詳細Routeの状態を保持する', () => {
     expect(buildDetailRouteParams(88, false)).toEqual({
       bookmarked: '0',
       id: '88',

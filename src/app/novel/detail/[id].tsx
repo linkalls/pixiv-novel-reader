@@ -267,7 +267,6 @@ export default function NovelDetailScreen() {
         pathname: '/novel/[id]',
         params: buildReaderRouteParams(detail.id, {
           bookmarked: bookmarkState.value,
-          fromDetail: true,
           resume,
         }),
       });

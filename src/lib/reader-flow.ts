@@ -1,6 +1,5 @@
 export interface ReaderRouteOptions {
   bookmarked?: boolean | null;
-  fromDetail?: boolean;
   resume?: boolean;
 }
 
@@ -15,10 +14,6 @@ export function buildReaderRouteParams(
 
   if (options.bookmarked !== null && options.bookmarked !== undefined) {
     params.bookmarked = options.bookmarked ? '1' : '0';
-  }
-
-  if (options.fromDetail) {
-    params.fromDetail = '1';
   }
 
   if (options.resume) {
@@ -41,14 +36,4 @@ export function buildDetailRouteParams(
   }
 
   return params;
-}
-
-/**
- * 詳細から読書を開いた場合は既存詳細へ戻し、履歴などから直接開いた場合は
- * 詳細Routeを新しく積む。
- */
-export function resolveReaderDetailAction(
-  openedFromDetail: boolean,
-): 'back' | 'push' {
-  return openedFromDetail ? 'back' : 'push';
 }
