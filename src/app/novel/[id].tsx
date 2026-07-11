@@ -22,6 +22,7 @@ import {
   StyleSheet,
   Text,
   View,
+  type GestureResponderEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
@@ -812,7 +813,8 @@ export default function NovelReaderScreen() {
             }
             bookmarked={bookmarkState.value === true}
             disabled={bookmarkState.value === null || isBookmarkLoading}
-            onPress={() => {
+            onPress={(event) => {
+              event.stopPropagation();
               void toggleBookmark();
             }}
             palette={palette}
@@ -1157,7 +1159,7 @@ interface ToolbarBookmarkButtonProps {
   accessibilityLabel: string;
   bookmarked: boolean;
   disabled?: boolean;
-  onPress: () => void;
+  onPress: (event: GestureResponderEvent) => void;
   palette: ReaderPalette;
   size: number;
 }
@@ -1176,8 +1178,12 @@ function ToolbarBookmarkButton({
       accessibilityRole="button"
       accessibilityState={{ busy: disabled, disabled, selected: bookmarked }}
       disabled={disabled}
-      hitSlop={10}
+      hitSlop={6}
       onPress={onPress}
+      onPressIn={(event) => {
+        event.stopPropagation();
+      }}
+      onStartShouldSetResponder={() => true}
       style={({ pressed }) => [
         toolbarStyles.button,
         pressed && toolbarStyles.pressed,

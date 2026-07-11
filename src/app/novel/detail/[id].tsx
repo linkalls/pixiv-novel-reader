@@ -19,7 +19,10 @@ import {
   type BookmarkState,
   type BookmarkStateSource,
 } from '@/lib/bookmark-state';
-import { emitNovelChanged } from '@/lib/novel-events';
+import {
+  emitNovelChanged,
+  subscribeNovelChanged,
+} from '@/lib/novel-events';
 import {
   cacheNovelForRoute,
   getCachedNovelForRoute,
@@ -50,6 +53,7 @@ export default function NovelDetailScreen() {
   const [detail, setDetail] = useState<PixivNovelItem | null>(initialNovel);
   const [isDetailLoading, setIsDetailLoading] = useState(isValidNovelId);
   const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
+  const [isOpeningReader, setIsOpeningReader] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(
     isValidNovelId ? null : '作品IDを読み取れなかったよ',
@@ -63,6 +67,9 @@ export default function NovelDetailScreen() {
           ? 'offline'
           : null,
   });
+  const readerTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const bookmarkStateRef = useRef<BookmarkState>({
     value: initialBookmarkState,
     source:
@@ -142,6 +149,25 @@ export default function NovelDetailScreen() {
     [detail],
   );
 
+  useEffect(() => {
+    return subscribeNovelChanged((changedNovel) => {
+      if (changedNovel.id !== novelId) {
+        return;
+      }
+
+      applyBookmarkState(changedNovel.isBookmarked, 'user');
+      setDetail(changedNovel);
+    });
+  }, [applyBookmarkState, novelId]);
+
+  useEffect(() => {
+    return () => {
+      if (readerTransitionTimerRef.current) {
+        clearTimeout(readerTransitionTimerRef.current);
+      }
+    };
+  }, []);
+
   async function toggleBookmark() {
     if (!detail || bookmarkState.value === null || isBookmarkLoading) {
       return;
@@ -181,7 +207,7 @@ export default function NovelDetailScreen() {
   }
 
   function openReaderFromBeginning() {
-    if (!detail) {
+    if (!detail || isOpeningReader) {
       return;
     }
 
@@ -189,15 +215,28 @@ export default function NovelDetailScreen() {
       ...detail,
       isBookmarked: bookmarkState.value ?? detail.isBookmarked,
     });
+    setIsOpeningReader(true);
 
-    // 詳細Routeを読書Routeへ置換する。
-    // 詳細をスタックへ残さないため、戻ると一覧へ直接戻る。
-    router.replace({
-      pathname: '/novel/[id]',
-      params: {
-        bookmarked: bookmarkState.value ? '1' : '0',
-        id: String(detail.id),
-      },
+    // 詳細Routeはスタックへ残す。
+    // 最初の1フレームだけ不透明カバーを先に描画し、詳細のチラ見えを防ぐ。
+    requestAnimationFrame(() => {
+      router.push({
+        pathname: '/novel/[id]',
+        params: {
+          bookmarked: bookmarkState.value ? '1' : '0',
+          id: String(detail.id),
+        },
+      });
+
+      if (readerTransitionTimerRef.current) {
+        clearTimeout(readerTransitionTimerRef.current);
+      }
+
+      // 読書画面の裏で解除するので、戻った時にカバーは残らない。
+      readerTransitionTimerRef.current = setTimeout(() => {
+        setIsOpeningReader(false);
+        readerTransitionTimerRef.current = null;
+      }, 700);
     });
   }
 
@@ -305,6 +344,7 @@ export default function NovelDetailScreen() {
 
         <Pressable
           accessibilityRole="button"
+          disabled={isOpeningReader}
           onPress={openReaderFromBeginning}
           style={({ pressed }) => [
             styles.readButton,
@@ -375,6 +415,17 @@ export default function NovelDetailScreen() {
           </View>
         ) : null}
       </ScrollView>
+
+      {isOpeningReader ? (
+        <View
+          accessibilityLabel="読書画面を開いています"
+          accessibilityViewIsModal
+          style={styles.readerTransition}
+        >
+          <ActivityIndicator color={colors.accent} size="large" />
+          <Text style={styles.readerTransitionText}>本文を開いてる…</Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -403,6 +454,24 @@ function createStyles(colors: AppColors) {
     safeArea: {
       flex: 1,
       backgroundColor: colors.background,
+    },
+    readerTransition: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      zIndex: 100,
+      elevation: 24,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 12,
+      backgroundColor: colors.background,
+    },
+    readerTransitionText: {
+      color: colors.textMuted,
+      fontSize: 13,
+      fontWeight: '700',
     },
     header: {
       minHeight: 58,
