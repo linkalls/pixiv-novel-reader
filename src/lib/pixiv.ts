@@ -92,7 +92,7 @@ export async function connectPixiv(refreshToken: string): Promise<PixivSession> 
   const normalizedToken = refreshToken.trim();
 
   if (normalizedToken.length === 0) {
-    throw new Error('refresh tokenが空だよ');
+    throw new Error('refresh tokenが空です');
   }
 
   currentClient = await PixivClient.of(normalizedToken, {
@@ -188,7 +188,7 @@ export async function searchNovels(
   const normalizedWord = word.trim();
 
   if (normalizedWord.length === 0) {
-    throw new Error('検索語を入力してね');
+    throw new Error('検索語を入力してください');
   }
 
   const client = requireClient();
@@ -282,7 +282,7 @@ export async function fetchNovelSeries(
   }
 
   if (!detail) {
-    throw new Error('シリーズ情報を取得できなかったよ');
+    throw new Error('シリーズ情報を取得できませんでした');
   }
 
   return {
@@ -339,7 +339,7 @@ export function parseNovelAjaxResponse(
     envelope = JSON.parse(rawResponse.trim()) as PixivAjaxNovelEnvelope;
   } catch (error) {
     throw new Error(
-      `PixivのAjax JSONを解析できなかったよ: ${toUnknownError(error)}`,
+      `PixivのAjax JSONを解析できませんでした: ${toUnknownError(error)}`,
     );
   }
 
@@ -347,12 +347,12 @@ export function parseNovelAjaxResponse(
     const message =
       typeof envelope.message === 'string' && envelope.message.trim().length > 0
         ? envelope.message
-        : 'PixivのWebログインcookieを使えなかったよ';
+        : 'PixivのWebログインcookieを利用できませんでした';
     throw new Error(message);
   }
 
   if (!isRecord(envelope.body)) {
-    throw new Error('PixivのAjaxレスポンスに本文データがなかったよ');
+    throw new Error('PixivのAjaxレスポンスに本文データがありません');
   }
 
   return parseAjaxNovelBody(envelope.body, fallbackNovelId);
@@ -370,13 +370,13 @@ export function parseNovelWebviewHtml(
   const markerIndex = html.search(/\bnovel\s*:/);
 
   if (markerIndex < 0) {
-    throw new Error('Pixivの本文データが見つからなかったよ');
+    throw new Error('Pixivの本文データが見つかりません');
   }
 
   const objectStart = html.indexOf('{', markerIndex);
 
   if (objectStart < 0) {
-    throw new Error('Pixivの本文JSONを読み取れなかったよ');
+    throw new Error('Pixivの本文JSONを読み取れませんでした');
   }
 
   let depth = 0;
@@ -426,7 +426,7 @@ export function parseNovelWebviewHtml(
   }
 
   if (objectEnd < 0) {
-    throw new Error('Pixivの本文JSONが途中で切れてるよ');
+    throw new Error('Pixivの本文JSONが途中で切れています');
   }
 
   let payload: EmbeddedNovelPayload;
@@ -437,12 +437,12 @@ export function parseNovelWebviewHtml(
     ) as EmbeddedNovelPayload;
   } catch (error) {
     throw new Error(
-      `Pixivの本文JSONを解析できなかったよ: ${toUnknownError(error)}`,
+      `Pixivの本文JSONを解析できませんでした: ${toUnknownError(error)}`,
     );
   }
 
   if (typeof payload.text !== 'string' || payload.text.trim().length === 0) {
-    throw new Error('この作品の本文が空だったよ');
+    throw new Error('この作品の本文が空です');
   }
 
   return {
@@ -471,7 +471,7 @@ function parseAjaxNovelBody(
     typeof typedBody.content !== 'string' ||
     typedBody.content.trim().length === 0
   ) {
-    throw new Error('PixivのAjaxレスポンス本文が空だったよ');
+    throw new Error('PixivのAjaxレスポンス本文が空です');
   }
 
   return {
@@ -555,7 +555,7 @@ function collectLegacyEmbeddedImages(
 
 function requireClient(): PixivClient {
   if (!currentClient) {
-    throw new Error('Pixivへログインし直してね');
+    throw new Error('Pixivへ再ログインしてください');
   }
 
   return currentClient;
@@ -620,9 +620,9 @@ function formatPixivError(error: PixivError): string {
     case 'auth_failed':
       return `Pixiv認証の有効期限が切れてるよ（HTTP ${error.status}）`;
     case 'api_error':
-      return `Pixiv APIがエラーを返したよ（HTTP ${error.status}）`;
+      return `Pixiv APIがエラーを返しました（HTTP ${error.status}）`;
     case 'network':
-      return 'Pixivへの通信に失敗したよ。ネット接続を確認してね';
+      return 'Pixivへの通信に失敗しました。ネットワーク接続を確認してください';
   }
 }
 

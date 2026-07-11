@@ -127,7 +127,7 @@ export function ReaderMarksModal({
       setMarks(nextMarks);
       setNote('');
       Keyboard.dismiss();
-      onStatus(`しおりを追加したよ（${Math.round(currentProgress * 100)}%）`);
+      onStatus(`しおりを追加しました（${Math.round(currentProgress * 100)}%）`);
       const created = nextMarks.find((mark) => mark.id === id);
       if (created) {
         setEditingMarkId(null);
@@ -156,7 +156,7 @@ export function ReaderMarksModal({
       setEditingMarkId(null);
       setNote('');
       Keyboard.dismiss();
-      onStatus('メモを更新したよ');
+      onStatus('メモを更新しました');
     } catch (saveError) {
       setError(toErrorMessage(saveError));
     } finally {
@@ -172,7 +172,7 @@ export function ReaderMarksModal({
         setEditingMarkId(null);
         setNote('');
       }
-      onStatus('しおりを削除したよ');
+      onStatus('しおりを削除しました');
     } catch (removeError) {
       setError(toErrorMessage(removeError));
     }

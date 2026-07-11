@@ -132,7 +132,7 @@ export function RecommendationExclusionsModal({
             ) : items.length === 0 ? (
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>除外した作品はないよ</Text>
-                <Text style={styles.muted}>おすすめカードの「興味なし」から登録できる。</Text>
+                <Text style={styles.muted}>おすすめカードの「興味なし」から除外できます。</Text>
               </View>
             ) : (
               items.map((item) => (

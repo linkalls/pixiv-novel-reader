@@ -73,7 +73,7 @@ export async function deleteNovelOfflineAssets(novelId: number): Promise<void> {
 
 function getNovelAssetDirectory(novelId: number): string {
   if (!documentDirectory) {
-    throw new Error('端末の保存領域を利用できなかったよ');
+    throw new Error('端末の保存領域を利用できませんでした');
   }
 
   return `${documentDirectory}${OFFLINE_ROOT_NAME}/${novelId}`;

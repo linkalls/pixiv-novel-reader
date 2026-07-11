@@ -236,7 +236,7 @@ export default function NovelReaderScreen() {
   });
   const [ajaxAttempt, setAjaxAttempt] = useState(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(
-    isValidNovelId ? null : '作品IDを読み取れなかったよ',
+    isValidNovelId ? null : '作品IDを読み取れませんでした',
   );
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [isMoreVisible, setIsMoreVisible] = useState(false);
@@ -723,7 +723,7 @@ export default function NovelReaderScreen() {
           setReaderContent(offlineRecord.content);
           setIsOfflineSaved(true);
           setErrorMessage(null);
-          showStatus('通信できなかったため、保存済み本文を表示したよ');
+          showStatus('通信できないため、保存済み本文を表示しました');
         } else {
           setErrorMessage(
             `${ajaxError.message}\n${toErrorMessage(fallbackError)}`,
@@ -845,8 +845,8 @@ export default function NovelReaderScreen() {
       await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
       showStatus(
         shouldBookmark
-          ? 'ブックマークに追加したよ'
-          : 'ブックマークを解除したよ',
+          ? 'ブックマークに追加しました'
+          : 'ブックマークを解除しました',
       );
     } catch (error) {
       applyBookmarkState(previousBookmarkState, 'user');
@@ -874,7 +874,7 @@ export default function NovelReaderScreen() {
         await deleteOfflineNovel(detail.id);
         setIsOfflineSaved(false);
         hasOfflineContentRef.current = false;
-        showStatus('オフライン保存を削除したよ');
+        showStatus('オフライン保存を削除しました');
       } else {
         const localizedContent = await localizeNovelImages(
           detail.id,
@@ -896,8 +896,8 @@ export default function NovelReaderScreen() {
         hasOfflineContentRef.current = true;
         showStatus(
           Object.keys(localizedContent.embeddedImages).length > 0
-            ? '本文と挿絵をオフライン保存したよ'
-            : '本文をオフライン保存したよ',
+            ? '本文と挿絵をオフライン保存しました'
+            : '本文をオフライン保存しました',
         );
       }
     } catch (error) {
@@ -990,7 +990,7 @@ export default function NovelReaderScreen() {
         next.add(novel.id);
         return next;
       });
-      showStatus('この作品をおすすめから非表示にしたよ');
+      showStatus('この作品をおすすめから非表示にしました');
     } catch (error) {
       showStatus(`おすすめ設定を変更できなかった: ${toErrorMessage(error)}`);
     }
@@ -1098,7 +1098,7 @@ export default function NovelReaderScreen() {
       {isTextLoading ? (
         <View style={styles.centered}>
           <ActivityIndicator color={palette.accent} size="large" />
-          <Text style={styles.loadingText}>本文を読み込んでる…</Text>
+          <Text style={styles.loadingText}>本文を読み込み中…</Text>
         </View>
       ) : readerContent ? (
         <ScrollView
@@ -1205,11 +1205,11 @@ export default function NovelReaderScreen() {
           ) : null}
 
           <RecommendationSection
-            emptyText="似ている作品は見つからなかったよ"
+            emptyText="類似する作品は見つかりませんでした"
             error={relatedError}
             eyebrow="FOR YOU"
             isLoading={isRelatedLoading}
-            loadingText="似ている作品を探してる…"
+            loadingText="関連作品を検索中…"
             currentNovel={detail}
             novels={relatedItems}
             onExclude={(relatedNovel) => {
@@ -1235,11 +1235,11 @@ export default function NovelReaderScreen() {
           />
 
           <RecommendationSection
-            emptyText="新しい作品との出会いは、また次回のお楽しみ。"
+            emptyText="該当する作品はありません"
             error={discoveryError}
             eyebrow="DISCOVERY"
             isLoading={isDiscoveryLoading}
-            loadingText="ディスカバリーを準備してる…"
+            loadingText="ディスカバリーを読み込み中…"
             currentNovel={detail}
             novels={discoveryItems}
             onExclude={(discoveryNovel) => {
@@ -1266,9 +1266,9 @@ export default function NovelReaderScreen() {
         </ScrollView>
       ) : (
         <View style={styles.centered}>
-          <Text style={styles.errorTitle}>本文を表示できなかった</Text>
+          <Text style={styles.errorTitle}>本文を表示できませんでした</Text>
           <Text style={styles.errorText}>
-            {errorMessage ?? '本文を読み込めなかったよ'}
+            {errorMessage ?? '本文を読み込めませんでした'}
           </Text>
           <Pressable
             accessibilityRole="button"
@@ -1372,7 +1372,7 @@ export default function NovelReaderScreen() {
             next.delete(restoredNovelId);
             return next;
           });
-          showStatus('おすすめへ戻したよ');
+          showStatus('おすすめへ戻しました');
         }}
         overlay={palette.overlay}
         text={palette.text}
@@ -1528,12 +1528,12 @@ function SeriesNavigationSection({
       {isLoading ? (
         <View style={styles.seriesLoading}>
           <ActivityIndicator color={palette.accent} />
-          <Text style={styles.relatedMuted}>シリーズを読み込んでる…</Text>
+          <Text style={styles.relatedMuted}>シリーズを読み込み中…</Text>
         </View>
       ) : error ? (
         <View style={styles.seriesCompleteCard}>
           <Text style={styles.seriesCompleteTitle}>
-            シリーズを読み込めなかった
+            シリーズを読み込めませんでした
           </Text>
           <Text numberOfLines={3} style={styles.relatedMuted}>
             {error}
@@ -1572,7 +1572,7 @@ function SeriesNavigationSection({
             <View style={styles.seriesCompleteCard}>
               <Text style={styles.seriesCompleteTitle}>シリーズ最新話まで読了</Text>
               <Text style={styles.relatedMuted}>
-                新しい話が追加されたらシリーズ一覧から確認できる。
+                新しい話は、追加後にシリーズ一覧から確認できます。
               </Text>
             </View>
           )}
@@ -2322,9 +2322,12 @@ function createStyles(palette: ReaderPalette) {
     },
     toolbarTitle: {
       width: '100%',
+      flexShrink: 1,
       color: palette.text,
       fontSize: 14,
       fontWeight: '700',
+      includeFontPadding: true,
+      lineHeight: 21,
       textAlign: 'center',
     },
     progressTrack: {
@@ -2344,8 +2347,13 @@ function createStyles(palette: ReaderPalette) {
       backgroundColor: palette.background,
     },
     loadingText: {
+      alignSelf: 'stretch',
       color: palette.muted,
       fontSize: 13,
+      includeFontPadding: true,
+      lineHeight: 21,
+      paddingHorizontal: 8,
+      textAlign: 'center',
     },
     errorTitle: {
       color: palette.text,
@@ -2637,8 +2645,10 @@ function createStyles(palette: ReaderPalette) {
       gap: 10,
     },
     relatedMuted: {
+      flexShrink: 1,
       color: palette.muted,
       fontSize: 12,
+      includeFontPadding: true,
       lineHeight: 19,
     },
     relatedErrorCard: {
@@ -2768,10 +2778,12 @@ function createStyles(palette: ReaderPalette) {
       elevation: 7,
     },
     statusToastText: {
+      width: '100%',
       color: palette.text,
       fontSize: 12,
       fontWeight: '700',
-      lineHeight: 18,
+      includeFontPadding: true,
+      lineHeight: 19,
       textAlign: 'center',
     },
     pressed: {

@@ -371,7 +371,7 @@ export default function HomeScreen() {
     if (word.length === 0) {
       updateFeed('search', (current) => ({
         ...current,
-        error: '検索語を入力してね',
+        error: '検索語を入力してください',
       }));
       return;
     }
@@ -426,7 +426,7 @@ export default function HomeScreen() {
       <SafeAreaView style={styles.centeredScreen}>
         <ActivityIndicator color={colors.accent} size="large" />
         <Text style={styles.bootTitle}>Pixiv Novel Reader</Text>
-        <Text style={styles.bootText}>保存済みログインを確認してる…</Text>
+        <Text style={styles.bootText}>保存済みログインを確認中…</Text>
       </SafeAreaView>
     );
   }
@@ -566,7 +566,7 @@ export default function HomeScreen() {
         <View style={styles.offlineModeBanner}>
           <Text style={styles.offlineModeTitle}>オフラインモード</Text>
           <Text numberOfLines={2} style={styles.offlineModeText}>
-            保存済み本文と読書履歴を利用できるよ。通信が戻ったらアプリを開き直してね。
+            保存済み本文と読書履歴を利用できます。通信の復旧後にアプリを再起動してください。
           </Text>
         </View>
       ) : null}
@@ -739,7 +739,7 @@ export default function HomeScreen() {
                 : `Pixivへ接続済み · userId ${userId}`}
             </Text>
             <Text style={styles.settingsNote}>
-              ログアウトすると、端末に保存した認証情報を削除するよ。
+              ログアウトすると、端末に保存した認証情報を削除します。
             </Text>
             <View style={styles.settingsDivider} />
             <Text style={styles.settingsSectionTitle}>表示テーマ</Text>
@@ -812,9 +812,9 @@ function FeedControls({
   if (activeTab === 'recommended') {
     return (
       <View style={styles.feedIntro}>
-        <Text style={styles.feedIntroTitle}>君向けの小説</Text>
+        <Text style={styles.feedIntroTitle}>おすすめの小説</Text>
         <Text style={styles.feedIntroText}>
-          Pixivのおすすめを小説だけに絞って表示してる。
+          Pixivのおすすめから小説のみを表示します。
         </Text>
       </View>
     );
@@ -929,7 +929,7 @@ function FeedControls({
         ))}
       </ScrollView>
       {searchSort === 'popular_desc' && (
-        <Text style={styles.premiumNote}>人気順はPixiv Premium限定の場合があるよ。</Text>
+        <Text style={styles.premiumNote}>人気順はPixiv Premium限定の場合があります。</Text>
       )}
     </View>
   );
@@ -983,7 +983,7 @@ function EmptyFeed({
     return (
       <View style={styles.emptyState}>
         <ActivityIndicator color={colors.accent} size="large" />
-        <Text style={styles.emptyTitle}>小説を読み込んでる…</Text>
+        <Text style={styles.emptyTitle}>小説を読み込み中…</Text>
       </View>
     );
   }
@@ -1002,14 +1002,14 @@ function EmptyFeed({
     <View style={styles.emptyState}>
       <Text style={styles.emptyEmoji}>{tab === 'search' ? '🔎' : '📚'}</Text>
       <Text style={styles.emptyTitle}>
-        {tab === 'search' ? '読みたい小説を検索しよう' : '小説が見つからなかった'}
+        {tab === 'search' ? '小説を検索' : '小説が見つかりませんでした'}
       </Text>
       <Text style={styles.emptyText}>
         {tab === 'bookmarks'
-          ? '公開／非公開を切り替えて確認してみてね。'
+          ? '公開／非公開を切り替えて確認してください。'
           : tab === 'search'
-            ? 'キーワードを入れて検索ボタンを押してね。'
-            : '条件を変えるか、少し時間を置いて更新してみてね。'}
+            ? 'キーワードを入力して検索してください。'
+            : '条件を変更するか、時間を置いて更新してください。'}
       </Text>
     </View>
   );
@@ -1031,7 +1031,7 @@ function FeedFooter({
     return (
       <View style={styles.footerLoading}>
         <ActivityIndicator color={colors.accent} />
-        <Text style={styles.footerText}>続きを読み込んでる…</Text>
+        <Text style={styles.footerText}>続きを読み込み中…</Text>
       </View>
     );
   }
@@ -1097,8 +1097,12 @@ function createStyles(colors: AppColors) {
     fontWeight: '900',
   },
   bootText: {
+    alignSelf: 'stretch',
     color: colors.textMuted,
     fontSize: 13,
+    includeFontPadding: true,
+    lineHeight: 21,
+    textAlign: 'center',
   },
   loginSafeArea: {
     flex: 1,
@@ -1423,9 +1427,12 @@ function createStyles(colors: AppColors) {
     fontSize: 34,
   },
   emptyTitle: {
+    alignSelf: 'stretch',
     color: colors.text,
     fontSize: 17,
     fontWeight: '900',
+    includeFontPadding: true,
+    lineHeight: 27,
     textAlign: 'center',
   },
   emptyText: {
@@ -1442,8 +1449,11 @@ function createStyles(colors: AppColors) {
     paddingVertical: 24,
   },
   footerText: {
+    flexShrink: 1,
     color: colors.textMuted,
     fontSize: 12,
+    includeFontPadding: true,
+    lineHeight: 19,
   },
   footerSpace: {
     height: 24,

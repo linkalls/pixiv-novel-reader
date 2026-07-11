@@ -49,7 +49,7 @@ describe('parseNovelAjaxResponse', () => {
           body: [],
         }),
       ),
-    ).toThrow('PixivのWebログインcookieを使えなかったよ');
+    ).toThrow('PixivのWebログインcookieを利用できませんでした');
   });
 });
 

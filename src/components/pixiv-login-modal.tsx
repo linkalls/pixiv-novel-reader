@@ -167,7 +167,7 @@ export function PixivLoginModal({
 
               if (!nativeEvent.url.startsWith('pixiv://')) {
                 setErrorMessage(
-                  `ログイン画面を読み込めなかったよ: ${nativeEvent.description}`,
+                  `ログイン画面を読み込めませんでした: ${nativeEvent.description}`,
                 );
               }
             }}
@@ -200,7 +200,7 @@ export function PixivLoginModal({
               <ActivityIndicator color={colors.accent} size="large" />
               <Text style={styles.exchangeTitle}>ログイン処理中</Text>
               <Text style={styles.exchangeText}>
-                Pixivの認証コードをrefresh tokenへ交換してるよ
+                Pixivの認証コードをrefresh tokenへ交換しています
               </Text>
             </View>
           </View>
@@ -261,8 +261,13 @@ function createStyles(colors: AppColors) {
     gap: 14,
   },
   loadingText: {
+    alignSelf: 'stretch',
     color: colors.textSecondary,
     fontSize: 14,
+    includeFontPadding: true,
+    lineHeight: 22,
+    paddingHorizontal: 12,
+    textAlign: 'center',
   },
   errorContainer: {
     flex: 1,

@@ -164,8 +164,8 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
 
   function confirmClearHistory() {
     Alert.alert(
-      '読書履歴を消す？',
-      '本棚・しおり・オフライン保存は消さないよ。',
+      '読書履歴を削除しますか？',
+      '本棚・しおり・オフライン保存は削除されません。',
       [
         { text: 'キャンセル', style: 'cancel' },
         {
@@ -227,8 +227,8 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
       return;
     }
     Alert.alert(
-      `「${selectedShelf.name}」を削除する？`,
-      '作品の履歴やオフライン保存は消えないよ。',
+      `「${selectedShelf.name}」を削除しますか？`,
+      '作品の履歴やオフライン保存は削除されません。',
       [
         { text: 'キャンセル', style: 'cancel' },
         {
@@ -777,40 +777,40 @@ function getEmptyMessage(
   shelfName?: string,
 ) {
   if (error) {
-    return { icon: '⚠', title: 'ライブラリを開けなかった', description: error };
+    return { icon: '⚠', title: 'ライブラリを開けませんでした', description: error };
   }
   if (mode === 'history') {
     return {
       icon: '🕘',
-      title: '条件に合う履歴がないよ',
-      description: '小説を読むと、ここから続きへ戻れる。',
+      title: '条件に合う履歴はありません',
+      description: '小説を読むと、ここから続きへ戻れます。',
     };
   }
   if (mode === 'offline') {
     return {
       icon: '⇩',
-      title: 'オフライン作品はまだないよ',
-      description: '読書画面の「…」から本文と挿絵を保存できる。',
+      title: 'オフライン作品はありません',
+      description: '読書画面の「…」から本文と挿絵を保存できます。',
     };
   }
   if (mode === 'marks') {
     return {
       icon: '🔖',
-      title: 'しおり・メモはまだないよ',
-      description: '読書画面の「…」から現在位置を保存できる。',
+      title: 'しおり・メモはありません',
+      description: '読書画面の「…」から現在位置を保存できます。',
     };
   }
   return {
     icon: '📚',
-    title: `「${shelfName ?? '本棚'}」は空だよ`,
-    description: '読書画面の「…」から好きな本棚へ追加できる。',
+    title: `「${shelfName ?? '本棚'}」は空です`,
+    description: '読書画面の「…」から本棚へ追加できます。',
   };
 }
 
 function formatRelativeTime(timestamp: number): string {
   const elapsed = Math.max(0, Date.now() - timestamp);
   const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 1) return 'たった今';
+  if (minutes < 1) return '1分未満';
   if (minutes < 60) return `${minutes}分前`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}時間前`;
@@ -821,7 +821,7 @@ function formatRelativeTime(timestamp: number): string {
 
 function toErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes('UNIQUE') ? '同じ名前の本棚があるよ' : message;
+  return message.includes('UNIQUE') ? '同じ名前の本棚が存在します' : message;
 }
 
 function createStyles(colors: AppColors) {

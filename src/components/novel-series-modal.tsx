@@ -84,7 +84,7 @@ export function NovelSeriesModal({
           {isLoading ? (
             <View style={styles.centered}>
               <ActivityIndicator color={accent} size="large" />
-              <Text style={styles.muted}>シリーズを読み込んでる…</Text>
+              <Text style={styles.muted}>シリーズを読み込み中…</Text>
             </View>
           ) : error ? (
             <View style={styles.centered}>
@@ -229,8 +229,11 @@ function createStyles(colors: {
       paddingHorizontal: 24,
     },
     muted: {
+      flexShrink: 1,
       color: colors.muted,
       fontSize: 12,
+      includeFontPadding: true,
+      lineHeight: 19,
     },
     error: {
       color: colors.muted,

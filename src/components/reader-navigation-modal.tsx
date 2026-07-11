@@ -174,11 +174,11 @@ export function ReaderNavigationModal({
               <View style={styles.empty}>
                 <Text style={styles.emptyTitle}>
                   {query.trim().length > 0
-                    ? '一致する箇所がなかったよ'
-                    : '検索語を入力してね'}
+                    ? '一致する箇所はありません'
+                    : '検索語を入力してください'}
                 </Text>
                 <Text style={styles.emptyText}>
-                  章題と本文をまとめて検索できる。
+                  章題と本文をまとめて検索できます。
                 </Text>
               </View>
             )}

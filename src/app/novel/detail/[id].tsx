@@ -65,7 +65,7 @@ export default function NovelDetailScreen() {
   const [readingHistory, setReadingHistory] = useState<LibraryNovel | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(
-    isValidNovelId ? null : '作品IDを読み取れなかったよ',
+    isValidNovelId ? null : '作品IDを読み取れませんでした',
   );
   const [bookmarkState, setBookmarkState] = useState<BookmarkState>({
     value: initialBookmarkState,
@@ -307,13 +307,13 @@ export default function NovelDetailScreen() {
           {isDetailLoading ? (
             <>
               <ActivityIndicator color={colors.accent} size="large" />
-              <Text style={styles.loadingText}>作品情報を読み込んでる…</Text>
+              <Text style={styles.loadingText}>作品情報を読み込み中…</Text>
             </>
           ) : (
             <>
-              <Text style={styles.errorTitle}>作品を開けなかった</Text>
+              <Text style={styles.errorTitle}>作品を開けませんでした</Text>
               <Text style={styles.errorText}>
-                {errorMessage ?? '作品情報を取得できなかったよ'}
+                {errorMessage ?? '作品情報を取得できませんでした'}
               </Text>
               <Pressable
                 accessibilityRole="button"
@@ -424,7 +424,7 @@ export default function NovelDetailScreen() {
                   ]}
                 />
               </View>
-              <Text style={styles.readProgressText}>前回はここまで読んだよ</Text>
+              <Text style={styles.readProgressText}>前回の読書位置</Text>
               <Pressable
                 accessibilityRole="button"
                 disabled={isOpeningReader}
@@ -512,7 +512,7 @@ export default function NovelDetailScreen() {
           style={styles.readerTransition}
         >
           <ActivityIndicator color={colors.accent} size="large" />
-          <Text style={styles.readerTransitionText}>本文を開いてる…</Text>
+          <Text style={styles.readerTransitionText}>本文を開いています…</Text>
         </View>
       ) : null}
     </SafeAreaView>
@@ -652,6 +652,8 @@ function createStyles(colors: AppColors) {
       color: colors.textMuted,
       fontSize: 11,
       fontWeight: '700',
+      includeFontPadding: true,
+      lineHeight: 18,
       textAlign: 'center',
     },
     restartButton: {
@@ -741,8 +743,12 @@ function createStyles(colors: AppColors) {
       gap: 10,
     },
     loadingText: {
+      flexShrink: 1,
       color: colors.textSecondary,
       fontSize: 13,
+      includeFontPadding: true,
+      lineHeight: 21,
+      paddingVertical: 1,
     },
     errorTitle: {
       color: colors.text,

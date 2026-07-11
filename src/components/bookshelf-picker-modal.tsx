@@ -136,8 +136,8 @@ export function BookshelfPickerModal({
       );
       onStatus(
         shouldInclude
-          ? `「${shelf.name}」へ追加したよ`
-          : `「${shelf.name}」から外したよ`,
+          ? `「${shelf.name}」へ追加しました`
+          : `「${shelf.name}」から外しました`,
       );
     } catch (toggleError) {
       setMemberships(previous);
@@ -161,7 +161,7 @@ export function BookshelfPickerModal({
       setMemberships((current) => new Set(current).add(created.id));
       setNewName('');
       Keyboard.dismiss();
-      onStatus(`「${created.name}」を作って追加したよ`);
+      onStatus(`「${created.name}」を作成して追加しました`);
     } catch (createError) {
       setError(toErrorMessage(createError));
     } finally {
@@ -210,7 +210,7 @@ export function BookshelfPickerModal({
           {isLoading ? (
             <View style={styles.loading}>
               <ActivityIndicator color={accent} />
-              <Text style={styles.muted}>本棚を読み込んでる…</Text>
+              <Text style={styles.muted}>本棚を読み込み中…</Text>
             </View>
           ) : (
             <ScrollView
@@ -297,7 +297,7 @@ export function BookshelfPickerModal({
 function toErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes('UNIQUE')
-    ? '同じ名前の本棚があるよ'
+    ? '同じ名前の本棚が存在します'
     : message;
 }
 
@@ -407,7 +407,13 @@ function createStyles(colors: {
     checkText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
     rowBody: { flex: 1, gap: 3 },
     rowTitle: { color: colors.text, fontSize: 14, fontWeight: '800' },
-    muted: { color: colors.muted, fontSize: 11 },
+    muted: {
+      flexShrink: 1,
+      color: colors.muted,
+      fontSize: 11,
+      includeFontPadding: true,
+      lineHeight: 18,
+    },
     createArea: {
       flexDirection: 'row',
       gap: 9,

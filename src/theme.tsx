@@ -161,7 +161,7 @@ export function useAppTheme(): ThemeContextValue {
   const value = useContext(ThemeContext);
 
   if (!value) {
-    throw new Error('useAppThemeはAppThemeProviderの内側で使ってね');
+    throw new Error('useAppThemeはAppThemeProviderの内側で使用してください');
   }
 
   return value;

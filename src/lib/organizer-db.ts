@@ -209,7 +209,7 @@ export async function createBookshelf(rawName: string): Promise<Bookshelf> {
   );
 
   if (!created) {
-    throw new Error('本棚を作成できなかったよ');
+    throw new Error('本棚を作成できませんでした');
   }
 
   return {
@@ -453,10 +453,10 @@ export async function listExcludedRecommendationIds(): Promise<Set<number>> {
 function normalizeShelfName(rawName: string): string {
   const name = rawName.trim().replace(/\s+/g, ' ');
   if (name.length === 0) {
-    throw new Error('本棚の名前を入力してね');
+    throw new Error('本棚の名前を入力してください');
   }
   if (name.length > 40) {
-    throw new Error('本棚の名前は40文字以内にしてね');
+    throw new Error('本棚の名前は40文字以内で入力してください');
   }
   return name;
 }

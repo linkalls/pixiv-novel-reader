@@ -61,7 +61,7 @@ export function PixivNovelAjaxLoader({
       }
 
       completedRef.current = true;
-      onFailure(new Error('PixivのAJAX本文取得がタイムアウトしたよ'));
+      onFailure(new Error('PixivのAJAX本文取得がタイムアウトしました'));
     }, AJAX_TIMEOUT_MS);
 
     return () => {
@@ -102,13 +102,13 @@ export function PixivNovelAjaxLoader({
         onError={({ nativeEvent }) => {
           failOnce(
             new Error(
-              `PixivのAjaxページを開けなかったよ: ${nativeEvent.description}`,
+              `PixivのAjaxページを開けませんでした: ${nativeEvent.description}`,
             ),
           );
         }}
         onHttpError={({ nativeEvent }) => {
           failOnce(
-            new Error(`PixivのAjax APIがHTTP ${nativeEvent.statusCode}を返したよ`),
+            new Error(`PixivのAjax APIがHTTP ${nativeEvent.statusCode}を返しました`),
           );
         }}
         onMessage={handleMessage}
