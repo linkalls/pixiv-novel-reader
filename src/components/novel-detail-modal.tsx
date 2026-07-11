@@ -1,6 +1,7 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import { Image } from 'expo-image';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -12,13 +13,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { PixivNovelAjaxLoader } from '@/components/pixiv-novel-ajax-loader';
-
 import {
   fetchNovelDetail,
-  fetchNovelText,
   setNovelBookmark,
-  type NovelReaderContent,
 } from '@/lib/pixiv';
 import { type AppColors, useAppTheme } from '@/theme';
 
@@ -35,19 +32,12 @@ export function NovelDetailModal({
   onNovelChanged,
   onRefreshToken,
 }: NovelDetailModalProps) {
-  const { colors, isDark } = useAppTheme();
+  const router = useRouter();
+  const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [detail, setDetail] = useState(novel);
   const [isDetailLoading, setIsDetailLoading] = useState(true);
   const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
-  const [isReaderOpen, setIsReaderOpen] = useState(false);
-  const [isTextLoading, setIsTextLoading] = useState(false);
-  const [isAjaxLoading, setIsAjaxLoading] = useState(false);
-  const [ajaxAttempt, setAjaxAttempt] = useState(0);
-  const fallbackStartedRef = useRef(false);
-  const [readerContent, setReaderContent] =
-    useState<NovelReaderContent | null>(null);
-  const [readerFontSize, setReaderFontSize] = useState(18);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -80,10 +70,6 @@ export function NovelDetailModal({
   }, [novel.id, onNovelChanged]);
 
   const caption = useMemo(() => stripHtml(detail.caption), [detail.caption]);
-  const formattedReaderText = useMemo(
-    () => (readerContent ? formatNovelText(readerContent.text) : ''),
-    [readerContent],
-  );
 
   async function toggleBookmark() {
     if (isBookmarkLoading) {
@@ -115,194 +101,16 @@ export function NovelDetailModal({
     }
   }
 
-  function openReader() {
-    setIsReaderOpen(true);
+  function openReaderFromBeginning() {
+    const novelId = String(detail.id);
+    onClose();
 
-    if (readerContent || isTextLoading) {
-      return;
-    }
-
-    fallbackStartedRef.current = false;
-    setIsTextLoading(true);
-    setIsAjaxLoading(true);
-    setErrorMessage(null);
-    setAjaxAttempt((current) => current + 1);
-  }
-
-  function handleAjaxSuccess(content: NovelReaderContent) {
-    setReaderContent(content);
-    setIsAjaxLoading(false);
-    setIsTextLoading(false);
-    setErrorMessage(null);
-  }
-
-  async function handleAjaxFailure(ajaxError: Error) {
-    if (fallbackStartedRef.current) {
-      return;
-    }
-
-    fallbackStartedRef.current = true;
-    setIsAjaxLoading(false);
-
-    try {
-      // Web cookieが消えている端末ではApp APIのWebViewレスポンスへ退避する。
-      const content = await fetchNovelText(detail.id);
-      setReaderContent(content);
-      setErrorMessage(null);
-    } catch (fallbackError) {
-      setErrorMessage(
-        `${ajaxError.message}
-${toErrorMessage(fallbackError)}`,
-      );
-    } finally {
-      setIsTextLoading(false);
-    }
-  }
-
-  function retryReader() {
-    fallbackStartedRef.current = false;
-    setReaderContent(null);
-    setErrorMessage(null);
-    setIsTextLoading(true);
-    setIsAjaxLoading(true);
-    setAjaxAttempt((current) => current + 1);
-  }
-
-  if (isReaderOpen) {
-    return (
-      <Modal
-        animationType="slide"
-        onRequestClose={() => {
-          setIsReaderOpen(false);
-        }}
-        presentationStyle="fullScreen"
-        visible
-      >
-        <SafeAreaView style={styles.readerSafeArea}>
-          {isAjaxLoading && (
-            <PixivNovelAjaxLoader
-              key={`${detail.id}-${ajaxAttempt}`}
-              novelId={detail.id}
-              onFailure={(error) => {
-                void handleAjaxFailure(error);
-              }}
-              onSuccess={handleAjaxSuccess}
-            />
-          )}
-          <View style={styles.readerHeader}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                setIsReaderOpen(false);
-              }}
-              style={({ pressed }) => [
-                styles.headerButton,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={styles.headerButtonText}>‹ 詳細</Text>
-            </Pressable>
-            <View style={styles.readerTitleArea}>
-              <Text numberOfLines={1} style={styles.readerTitle}>
-                {readerContent?.title ?? detail.title}
-              </Text>
-              {readerContent?.seriesTitle ? (
-                <Text numberOfLines={1} style={styles.readerSeriesTitle}>
-                  {readerContent.seriesTitle}
-                </Text>
-              ) : null}
-            </View>
-            <View style={styles.headerSpacer} />
-          </View>
-
-          <View style={styles.readerToolbar}>
-            <Text style={styles.readerThemeLabel}>
-              {isDark ? '🌙 ダーク' : '☀️ ライト'}
-            </Text>
-            <View style={styles.fontControls}>
-              <Pressable
-                accessibilityLabel="文字を小さくする"
-                accessibilityRole="button"
-                disabled={readerFontSize <= 14}
-                onPress={() => {
-                  setReaderFontSize((current) => Math.max(14, current - 1));
-                }}
-                style={({ pressed }) => [
-                  styles.fontButton,
-                  pressed && styles.pressed,
-                  readerFontSize <= 14 && styles.disabled,
-                ]}
-              >
-                <Text style={styles.fontButtonText}>A−</Text>
-              </Pressable>
-              <Text style={styles.fontSizeText}>{readerFontSize}</Text>
-              <Pressable
-                accessibilityLabel="文字を大きくする"
-                accessibilityRole="button"
-                disabled={readerFontSize >= 28}
-                onPress={() => {
-                  setReaderFontSize((current) => Math.min(28, current + 1));
-                }}
-                style={({ pressed }) => [
-                  styles.fontButton,
-                  pressed && styles.pressed,
-                  readerFontSize >= 28 && styles.disabled,
-                ]}
-              >
-                <Text style={styles.fontButtonText}>A＋</Text>
-              </Pressable>
-            </View>
-          </View>
-
-          {isTextLoading ? (
-            <View style={styles.centered}>
-              <ActivityIndicator color={colors.accent} size="large" />
-              <Text style={styles.loadingText}>本文を読み込んでる…</Text>
-            </View>
-          ) : readerContent ? (
-            <ScrollView
-              contentContainerStyle={styles.readerContent}
-              showsVerticalScrollIndicator={false}
-            >
-              <Text
-                selectable
-                style={[
-                  styles.readerBody,
-                  {
-                    fontSize: readerFontSize,
-                    lineHeight: Math.round(readerFontSize * 2.02),
-                  },
-                ]}
-              >
-                {formattedReaderText}
-              </Text>
-              <View style={styles.readerEnd}>
-                <Text style={styles.readerEndMark}>◆</Text>
-                <Text style={styles.readerEndText}>読了</Text>
-              </View>
-            </ScrollView>
-          ) : (
-            <View style={styles.centered}>
-              <Text style={styles.errorTitle}>本文を表示できなかった</Text>
-              <Text style={styles.errorText}>
-                {errorMessage ?? '本文を読み込めなかったよ'}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                onPress={retryReader}
-                style={({ pressed }) => [
-                  styles.primaryButton,
-                  styles.retryReaderButton,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text style={styles.primaryButtonText}>もう一度読み込む</Text>
-              </Pressable>
-            </View>
-          )}
-        </SafeAreaView>
-      </Modal>
-    );
+    requestAnimationFrame(() => {
+      router.push({
+        pathname: '/novel/[id]',
+        params: { id: novelId },
+      });
+    });
   }
 
   return (
@@ -360,51 +168,47 @@ ${toErrorMessage(fallbackError)}`,
             </View>
           </View>
 
-          <View style={styles.actionRow}>
-            <Pressable
-              accessibilityRole="button"
-              disabled={isBookmarkLoading}
-              onPress={() => {
-                void toggleBookmark();
-              }}
-              style={({ pressed }) => [
-                styles.bookmarkButton,
-                detail.isBookmarked && styles.bookmarkButtonActive,
-                pressed && styles.pressed,
-                isBookmarkLoading && styles.disabled,
-              ]}
-            >
-              {isBookmarkLoading ? (
-                <ActivityIndicator
-                  color={detail.isBookmarked ? colors.onAccent : colors.accent}
-                />
-              ) : (
-                <Text
-                  style={[
-                    styles.bookmarkButtonText,
-                    detail.isBookmarked && styles.bookmarkButtonTextActive,
-                  ]}
-                >
-                  {detail.isBookmarked
-                    ? '★ ブックマーク済み'
-                    : '☆ ブックマーク'}
-                </Text>
-              )}
-            </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={openReaderFromBeginning}
+            style={({ pressed }) => [
+              styles.readButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.readButtonText}>最初から読む</Text>
+          </Pressable>
 
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                openReader();
-              }}
-              style={({ pressed }) => [
-                styles.primaryButton,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={styles.primaryButtonText}>本文を読む</Text>
-            </Pressable>
-          </View>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isBookmarkLoading}
+            onPress={() => {
+              void toggleBookmark();
+            }}
+            style={({ pressed }) => [
+              styles.bookmarkButton,
+              detail.isBookmarked && styles.bookmarkButtonActive,
+              pressed && styles.pressed,
+              isBookmarkLoading && styles.disabled,
+            ]}
+          >
+            {isBookmarkLoading ? (
+              <ActivityIndicator
+                color={detail.isBookmarked ? colors.onAccent : colors.accent}
+              />
+            ) : (
+              <Text
+                style={[
+                  styles.bookmarkButtonText,
+                  detail.isBookmarked && styles.bookmarkButtonTextActive,
+                ]}
+              >
+                {detail.isBookmarked
+                  ? '★ ブックマーク済み'
+                  : '☆ ブックマーク'}
+              </Text>
+            )}
+          </Pressable>
 
           {detail.tags.length > 0 && (
             <View style={styles.tagsRow}>
@@ -430,7 +234,7 @@ ${toErrorMessage(fallbackError)}`,
             </View>
           )}
 
-          {errorMessage && !isReaderOpen && (
+          {errorMessage && (
             <View style={styles.errorCard}>
               <Text style={styles.errorText}>{errorMessage}</Text>
             </View>
@@ -456,24 +260,6 @@ function stripHtml(value: string): string {
     .trim();
 }
 
-/** Pixiv小説独自記法を、ネイティブTextでも読みやすい表記へ変換する。 */
-export function formatNovelText(value: string): string {
-  return value
-    .replace(/\r\n?/g, '\n')
-    .replace(/\[chapter:([^\]]+)]/g, '\n\n【$1】\n\n')
-    .replace(/\[newpage]/g, '\n\n──────────\n\n')
-    .replace(/\[pixivimage:([^\]]+)]/g, '\n\n［挿絵 $1］\n\n')
-    .replace(/\[uploadedimage:([^\]]+)]/g, '\n\n［挿絵 $1］\n\n')
-    .replace(/\[jump:([^\]]+)]/g, '\n\n［$1へ移動］\n\n')
-    .replace(/\[\[rb:([^>\]]+?)\s*>\s*([^\]]+)]]/g, '$1（$2）')
-    .replace(
-      /\[\[jumpuri:([^>\]]+?)\s*>\s*([^\]]+)]]/g,
-      '$1（$2）',
-    )
-    .replace(/\n{4,}/g, '\n\n\n')
-    .trim();
-}
-
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -484,10 +270,6 @@ function createStyles(colors: AppColors) {
       flex: 1,
       backgroundColor: colors.background,
     },
-    readerSafeArea: {
-      flex: 1,
-      backgroundColor: colors.readerBackground,
-    },
     header: {
       minHeight: 58,
       flexDirection: 'row',
@@ -496,15 +278,6 @@ function createStyles(colors: AppColors) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
       backgroundColor: colors.surface,
-    },
-    readerHeader: {
-      minHeight: 58,
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 15,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: colors.readerBorder,
-      backgroundColor: colors.readerBackground,
     },
     headerButton: {
       minWidth: 62,
@@ -522,68 +295,8 @@ function createStyles(colors: AppColors) {
       fontWeight: '800',
       textAlign: 'center',
     },
-    readerTitleArea: {
-      flex: 1,
-      alignItems: 'center',
-      gap: 1,
-    },
-    readerTitle: {
-      width: '100%',
-      color: colors.readerText,
-      fontSize: 14,
-      fontWeight: '800',
-      textAlign: 'center',
-    },
-    readerSeriesTitle: {
-      width: '100%',
-      color: colors.readerMuted,
-      fontSize: 10,
-      textAlign: 'center',
-    },
     headerSpacer: {
       width: 62,
-    },
-    readerToolbar: {
-      minHeight: 48,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 17,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: colors.readerBorder,
-      backgroundColor: colors.surfaceRaised,
-    },
-    readerThemeLabel: {
-      color: colors.readerMuted,
-      fontSize: 11,
-      fontWeight: '700',
-    },
-    fontControls: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 7,
-    },
-    fontButton: {
-      minWidth: 42,
-      minHeight: 32,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: colors.readerBorder,
-      borderRadius: 10,
-      backgroundColor: colors.readerBackground,
-    },
-    fontButtonText: {
-      color: colors.readerText,
-      fontSize: 12,
-      fontWeight: '800',
-    },
-    fontSizeText: {
-      minWidth: 23,
-      color: colors.readerMuted,
-      fontSize: 11,
-      fontVariant: ['tabular-nums'],
-      textAlign: 'center',
     },
     content: {
       width: '100%',
@@ -622,12 +335,20 @@ function createStyles(colors: AppColors) {
       color: colors.textMuted,
       fontSize: 12,
     },
-    actionRow: {
-      flexDirection: 'row',
-      gap: 10,
+    readButton: {
+      minHeight: 54,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 18,
+      borderRadius: 14,
+      backgroundColor: colors.accent,
+    },
+    readButtonText: {
+      color: colors.onAccent,
+      fontSize: 15,
+      fontWeight: '900',
     },
     bookmarkButton: {
-      flex: 1,
       minHeight: 50,
       alignItems: 'center',
       justifyContent: 'center',
@@ -647,25 +368,6 @@ function createStyles(colors: AppColors) {
     },
     bookmarkButtonTextActive: {
       color: colors.onAccent,
-    },
-    primaryButton: {
-      flex: 1,
-      minHeight: 50,
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingHorizontal: 16,
-      borderRadius: 14,
-      backgroundColor: colors.accent,
-    },
-    retryReaderButton: {
-      flex: 0,
-      minWidth: 190,
-      marginTop: 5,
-    },
-    primaryButtonText: {
-      color: colors.onAccent,
-      fontSize: 14,
-      fontWeight: '900',
     },
     tagsRow: {
       flexDirection: 'row',
@@ -704,14 +406,6 @@ function createStyles(colors: AppColors) {
       alignItems: 'center',
       gap: 10,
     },
-    centered: {
-      flex: 1,
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 15,
-      paddingHorizontal: 28,
-      backgroundColor: colors.readerBackground,
-    },
     loadingText: {
       color: colors.textSecondary,
       fontSize: 13,
@@ -721,51 +415,17 @@ function createStyles(colors: AppColors) {
       borderRadius: 14,
       backgroundColor: colors.dangerSoft,
     },
-    errorTitle: {
-      color: colors.readerText,
-      fontSize: 17,
-      fontWeight: '900',
-      textAlign: 'center',
-    },
     errorText: {
       color: colors.danger,
       fontSize: 13,
       lineHeight: 20,
       textAlign: 'center',
     },
-    readerContent: {
-      width: '100%',
-      maxWidth: 760,
-      alignSelf: 'center',
-      paddingHorizontal: 22,
-      paddingTop: 28,
-      paddingBottom: 120,
-      backgroundColor: colors.readerBackground,
-    },
-    readerBody: {
-      color: colors.readerText,
-      fontFamily: undefined,
-      letterSpacing: 0.25,
-    },
-    readerEnd: {
-      alignItems: 'center',
-      gap: 7,
-      paddingTop: 54,
-    },
-    readerEndMark: {
-      color: colors.readerMuted,
-      fontSize: 12,
-    },
-    readerEndText: {
-      color: colors.readerMuted,
-      fontSize: 11,
-      letterSpacing: 2,
-    },
     pressed: {
       opacity: 0.72,
     },
     disabled: {
-      opacity: 0.45,
+      opacity: 0.52,
     },
   });
 }
