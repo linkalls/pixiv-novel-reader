@@ -39,9 +39,10 @@ import {
   type Bookshelf,
   type ReaderMark,
 } from '@/lib/organizer-db';
+import { ReadingInsightsView } from '@/components/reading-insights-view';
 import { type AppColors, useAppTheme } from '@/theme';
 
-type LibraryMode = 'history' | 'shelves' | 'marks' | 'offline';
+type LibraryMode = 'history' | 'shelves' | 'marks' | 'offline' | 'stats';
 type ShelfEditorMode = 'create' | 'rename';
 
 interface LibraryViewProps {
@@ -114,6 +115,12 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
       if (mode === 'marks') {
         setMarks(await listReaderMarks());
         setItems([]);
+        return;
+      }
+
+      if (mode === 'stats') {
+        setItems([]);
+        setMarks([]);
         return;
       }
 
@@ -274,6 +281,11 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
           label="オフライン"
           onPress={() => setMode('offline')}
         />
+        <LibraryModeButton
+          active={mode === 'stats'}
+          label="統計"
+          onPress={() => setMode('stats')}
+        />
       </ScrollView>
 
       {mode === 'history' ? (
@@ -348,7 +360,13 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
         </View>
       ) : null}
 
-      {mode === 'marks' ? (
+      {mode === 'stats' ? (
+        <ReadingInsightsView
+          onDataRestored={() => {
+            void loadItems();
+          }}
+        />
+      ) : mode === 'marks' ? (
         <FlatList
           contentContainerStyle={styles.listContent}
           data={marks}

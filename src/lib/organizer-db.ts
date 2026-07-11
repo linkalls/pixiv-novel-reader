@@ -162,6 +162,11 @@ async function getOrganizerDatabase(): Promise<SQLiteDatabase> {
   return database;
 }
 
+/** バックアップや統計画面から整理機能のスキーマを初期化する。 */
+export async function ensureOrganizerStorage(): Promise<void> {
+  await getOrganizerDatabase();
+}
+
 export async function listBookshelves(): Promise<Bookshelf[]> {
   const database = await getOrganizerDatabase();
   const rows = await database.getAllAsync<BookshelfRow>(`

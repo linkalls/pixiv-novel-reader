@@ -17,9 +17,12 @@ interface NovelSeriesModalProps {
   currentNovelId: number;
   error: string | null;
   isLoading: boolean;
+  isDownloading: boolean;
+  downloadProgress: string | null;
   muted: string;
   novels: PixivNovelItem[];
   onClose: () => void;
+  onDownloadAll: () => void;
   onNovelPress: (novel: PixivNovelItem) => void;
   onRetry: () => void;
   overlay: string;
@@ -35,9 +38,12 @@ export function NovelSeriesModal({
   currentNovelId,
   error,
   isLoading,
+  isDownloading,
+  downloadProgress,
   muted,
   novels,
   onClose,
+  onDownloadAll,
   onNovelPress,
   onRetry,
   overlay,
@@ -80,6 +86,32 @@ export function NovelSeriesModal({
               <Text style={styles.closeText}>×</Text>
             </Pressable>
           </View>
+
+          <Pressable
+            accessibilityRole="button"
+            disabled={isLoading || isDownloading || novels.length === 0}
+            onPress={onDownloadAll}
+            style={({ pressed }) => [
+              styles.downloadButton,
+              (isLoading || isDownloading || novels.length === 0) &&
+                styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            {isDownloading ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : null}
+            <View style={styles.downloadTextArea}>
+              <Text style={styles.downloadTitle}>
+                {isDownloading
+                  ? `シリーズを保存中 ${downloadProgress ?? ''}`.trim()
+                  : 'シリーズを一括オフライン保存'}
+              </Text>
+              <Text style={styles.downloadSubtitle}>
+                本文と挿絵を全話分保存します
+              </Text>
+            </View>
+          </Pressable>
 
           {isLoading ? (
             <View style={styles.centered}>
@@ -221,6 +253,20 @@ function createStyles(colors: {
       fontSize: 22,
       lineHeight: 25,
     },
+    downloadButton: {
+      minHeight: 58,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      marginVertical: 12,
+      paddingHorizontal: 15,
+      borderRadius: 14,
+      backgroundColor: colors.accent,
+    },
+    downloadTextArea: { flex: 1, gap: 2 },
+    downloadTitle: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
+    downloadSubtitle: { color: 'rgba(255,255,255,0.78)', fontSize: 10 },
+    disabled: { opacity: 0.45 },
     centered: {
       minHeight: 240,
       alignItems: 'center',

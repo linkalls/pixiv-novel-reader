@@ -105,7 +105,7 @@ export async function exchangePixivAuthorizationCode(
       payload.error ??
       `HTTP ${response.status}`;
 
-    throw new Error(`Pixivのtoken交換に失敗したよ: ${detail}`);
+    throw new Error(`Pixivのtoken交換に失敗しました: ${detail}`);
   }
 
   return {

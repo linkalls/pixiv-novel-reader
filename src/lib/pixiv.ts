@@ -618,7 +618,7 @@ function formatPixivError(error: PixivError): string {
     case 'rate_limit':
       return `Pixiv APIのレート制限中。${Math.ceil(error.retryAfter / 1_000)}秒ほど待ってね`;
     case 'auth_failed':
-      return `Pixiv認証の有効期限が切れてるよ（HTTP ${error.status}）`;
+      return `Pixiv認証の有効期限が切れています（HTTP ${error.status}）`;
     case 'api_error':
       return `Pixiv APIがエラーを返しました（HTTP ${error.status}）`;
     case 'network':

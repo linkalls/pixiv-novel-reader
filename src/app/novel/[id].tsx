@@ -32,7 +32,12 @@ import Svg, { Path as SvgPath } from 'react-native-svg';
 import { BookshelfPickerModal } from '@/components/bookshelf-picker-modal';
 import { NovelSeriesModal } from '@/components/novel-series-modal';
 import { ReaderMarksModal } from '@/components/reader-marks-modal';
+import { ReaderSpeechModal } from '@/components/reader-speech-modal';
 import { RecommendationExclusionsModal } from '@/components/recommendation-exclusions-modal';
+import {
+  VerticalReaderView,
+  type VerticalReaderHandle,
+} from '@/components/vertical-reader-view';
 import { PixivNovelAjaxLoader } from '@/components/pixiv-novel-ajax-loader';
 import {
   ReaderNavigationModal,
@@ -70,6 +75,7 @@ import {
 } from '@/lib/novel-series';
 import { localizeNovelImages } from '@/lib/offline-assets';
 import { parseNovelBlocks, type NovelBlock } from '@/lib/novel-format';
+import { createReaderSpeechChunks } from '@/lib/reader-speech';
 import {
   buildReaderToc,
   searchReaderBlocks,
@@ -79,6 +85,11 @@ import {
   createReaderMarkExcerpt,
   findReaderBlockAtOffset,
 } from '@/lib/reader-marks';
+import {
+  finishReadingSession,
+  startReadingSession,
+  updateReadingSession,
+} from '@/lib/reading-stats-db';
 import {
   getRecommendationReason,
   type RecommendationSource,
@@ -100,11 +111,13 @@ const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 type ReaderThemeName = 'white' | 'gray' | 'black' | 'blue' | 'yellow';
 type ReaderFontSize = 'small' | 'normal' | 'large';
 type ReaderLineSpacing = 'narrow' | 'wide';
+type ReaderLayout = 'horizontal' | 'vertical';
 
 interface ReaderSettings {
   theme: ReaderThemeName;
   fontSize: ReaderFontSize;
   lineSpacing: ReaderLineSpacing;
+  layout: ReaderLayout;
 }
 
 interface ReaderPalette {
@@ -239,6 +252,7 @@ export default function NovelReaderScreen() {
     isValidNovelId ? null : '作品IDを読み取れませんでした',
   );
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
+  const [isSpeechVisible, setIsSpeechVisible] = useState(false);
   const [isMoreVisible, setIsMoreVisible] = useState(false);
   const [isBookshelfVisible, setIsBookshelfVisible] = useState(false);
   const [isMarksVisible, setIsMarksVisible] = useState(false);
@@ -257,10 +271,13 @@ export default function NovelReaderScreen() {
   const [isSeriesLoading, setIsSeriesLoading] = useState(false);
   const [seriesError, setSeriesError] = useState<string | null>(null);
   const [seriesAttempt, setSeriesAttempt] = useState(0);
+  const [isSeriesDownloading, setIsSeriesDownloading] = useState(false);
+  const [seriesDownloadProgress, setSeriesDownloadProgress] = useState<string | null>(null);
   const [offlineImageProgress, setOfflineImageProgress] = useState<string | null>(
     null,
   );
   const [scrollProgress, setScrollProgress] = useState(0);
+  const [verticalBlockIndex, setVerticalBlockIndex] = useState(0);
   const [relatedNovels, setRelatedNovels] = useState<PixivNovelItem[]>([]);
   const [isRelatedLoading, setIsRelatedLoading] = useState(isValidNovelId);
   const [relatedError, setRelatedError] = useState<string | null>(null);
@@ -274,14 +291,18 @@ export default function NovelReaderScreen() {
     theme: isAppDark ? 'black' : 'white',
     fontSize: 'normal',
     lineSpacing: 'wide',
+    layout: 'horizontal',
   });
   const fallbackStartedRef = useRef(false);
   const readerEndOffsetRef = useRef<number | null>(null);
   const novelBodyOffsetRef = useRef(0);
   const blockOffsetsRef = useRef<Record<number, number>>({});
   const scrollViewRef = useRef<ScrollView>(null);
+  const verticalReaderRef = useRef<VerticalReaderHandle>(null);
   const currentProgressRef = useRef(0);
   const currentScrollOffsetRef = useRef(0);
+  const verticalInitialProgressRef = useRef(0);
+  const pendingHorizontalProgressRef = useRef<number | null>(null);
   const progressSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -289,6 +310,8 @@ export default function NovelReaderScreen() {
   const hasRestoredPositionRef = useRef(false);
   const hasOfflineContentRef = useRef(false);
   const historyNovelIdRef = useRef<number | null>(null);
+  const readingSessionPromiseRef = useRef<Promise<number> | null>(null);
+  const readingSessionNovelIdRef = useRef<number | null>(null);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const palette = READER_THEMES[settings.theme];
@@ -298,11 +321,18 @@ export default function NovelReaderScreen() {
     [readerContent],
   );
   const tocEntries = useMemo(() => buildReaderToc(blocks), [blocks]);
-  const currentMarkBlockIndex = findReaderBlockAtOffset(
-    blockOffsetsRef.current,
-    novelBodyOffsetRef.current,
-    currentScrollOffsetRef.current,
+  const speechChunks = useMemo(
+    () => createReaderSpeechChunks(blocks),
+    [blocks],
   );
+  const currentMarkBlockIndex =
+    settings.layout === 'vertical'
+      ? verticalBlockIndex
+      : findReaderBlockAtOffset(
+          blockOffsetsRef.current,
+          novelBodyOffsetRef.current,
+          currentScrollOffsetRef.current,
+        );
   const currentMarkExcerpt = createReaderMarkExcerpt(
     blocks,
     currentMarkBlockIndex,
@@ -379,11 +409,15 @@ export default function NovelReaderScreen() {
         const lineSpacing = isReaderLineSpacing(parsed.lineSpacing)
           ? parsed.lineSpacing
           : 'wide';
+        const layout = isReaderLayout(parsed.layout)
+          ? parsed.layout
+          : 'horizontal';
 
         setSettings({
           theme,
           fontSize: nextFontSize,
           lineSpacing,
+          layout,
         });
       } catch {
         // 壊れた設定値は無視し、既定値で読める状態を優先する。
@@ -456,6 +490,7 @@ export default function NovelReaderScreen() {
           resumeOffsetRef.current = history.scrollOffset;
           currentProgressRef.current = history.progress;
           currentScrollOffsetRef.current = history.scrollOffset;
+          verticalInitialProgressRef.current = history.progress;
           setScrollProgress(history.progress);
         }
 
@@ -761,6 +796,22 @@ export default function NovelReaderScreen() {
   }, [detail, readerContent]);
 
   useEffect(() => {
+    if (
+      !detail ||
+      !readerContent ||
+      readingSessionNovelIdRef.current === detail.id
+    ) {
+      return;
+    }
+
+    readingSessionNovelIdRef.current = detail.id;
+    readingSessionPromiseRef.current = startReadingSession(
+      detail,
+      currentProgressRef.current,
+    );
+  }, [detail, readerContent]);
+
+  useEffect(() => {
     return () => {
       if (progressSaveTimerRef.current) {
         clearTimeout(progressSaveTimerRef.current);
@@ -774,6 +825,16 @@ export default function NovelReaderScreen() {
           currentProgressRef.current,
           currentScrollOffsetRef.current,
         );
+      }
+
+      const readingSession = readingSessionPromiseRef.current;
+      readingSessionPromiseRef.current = null;
+      if (readingSession) {
+        void readingSession
+          .then((sessionId) =>
+            finishReadingSession(sessionId, currentProgressRef.current),
+          )
+          .catch(() => {});
       }
     };
   }, [isValidNovelId, novelId]);
@@ -792,6 +853,13 @@ export default function NovelReaderScreen() {
   }
 
   function updateSettings(nextSettings: ReaderSettings) {
+    if (nextSettings.layout === 'vertical' && settings.layout !== 'vertical') {
+      verticalInitialProgressRef.current = currentProgressRef.current;
+    }
+    if (nextSettings.layout === 'horizontal' && settings.layout === 'vertical') {
+      pendingHorizontalProgressRef.current = currentProgressRef.current;
+      hasRestoredPositionRef.current = true;
+    }
     setSettings(nextSettings);
     void SecureStore.setItemAsync(
       READER_SETTINGS_KEY,
@@ -908,6 +976,58 @@ export default function NovelReaderScreen() {
     }
   }
 
+
+  async function downloadEntireSeries() {
+    if (
+      isSeriesDownloading ||
+      seriesNovels.length === 0 ||
+      !seriesId
+    ) {
+      return;
+    }
+
+    setIsSeriesDownloading(true);
+    setSeriesDownloadProgress(`0/${seriesNovels.length}`);
+    let savedCount = 0;
+    const failedTitles: string[] = [];
+
+    for (const [index, novel] of seriesNovels.entries()) {
+      setSeriesDownloadProgress(`${index + 1}/${seriesNovels.length}`);
+      try {
+        const targetDetail =
+          detail?.id === novel.id ? detail : await fetchNovelDetail(novel.id);
+        const targetContent =
+          detail?.id === novel.id && readerContent
+            ? readerContent
+            : await fetchNovelText(novel.id);
+        const localizedContent = await localizeNovelImages(
+          novel.id,
+          targetContent,
+        );
+        await saveOfflineNovel(targetDetail, localizedContent);
+        savedCount += 1;
+
+        if (novel.id === novelId) {
+          setIsOfflineSaved(true);
+          hasOfflineContentRef.current = true;
+        }
+      } catch {
+        failedTitles.push(novel.title);
+      }
+    }
+
+    setIsSeriesDownloading(false);
+    setSeriesDownloadProgress(null);
+
+    if (failedTitles.length === 0) {
+      showStatus(`シリーズ全${savedCount}話を保存しました`);
+    } else {
+      showStatus(
+        `${savedCount}話を保存し、${failedTitles.length}話の保存に失敗しました`,
+      );
+    }
+  }
+
   function scheduleProgressSave(progress: number, scrollOffset: number) {
     currentProgressRef.current = progress;
     currentScrollOffsetRef.current = scrollOffset;
@@ -923,6 +1043,14 @@ export default function NovelReaderScreen() {
         currentProgressRef.current,
         currentScrollOffsetRef.current,
       );
+      const readingSession = readingSessionPromiseRef.current;
+      if (readingSession) {
+        void readingSession
+          .then((sessionId) =>
+            updateReadingSession(sessionId, currentProgressRef.current),
+          )
+          .catch(() => {});
+      }
     }, 800);
   }
 
@@ -948,6 +1076,11 @@ export default function NovelReaderScreen() {
   }
 
   function jumpToBlock(blockIndex: number) {
+    if (settings.layout === 'vertical') {
+      verticalReaderRef.current?.jumpToBlock(blockIndex, true);
+      return;
+    }
+
     const blockOffset = blockOffsetsRef.current[blockIndex] ?? 0;
     const y = Math.max(0, novelBodyOffsetRef.current + blockOffset - 18);
     scrollViewRef.current?.scrollTo({ animated: true, y });
@@ -1002,7 +1135,11 @@ export default function NovelReaderScreen() {
     currentProgressRef.current = mark.progress;
     setScrollProgress(mark.progress);
     requestAnimationFrame(() => {
-      scrollViewRef.current?.scrollTo({ animated: true, y: mark.scrollOffset });
+      if (settings.layout === 'vertical') {
+        verticalReaderRef.current?.jumpToBlock(mark.blockIndex, true);
+      } else {
+        scrollViewRef.current?.scrollTo({ animated: true, y: mark.scrollOffset });
+      }
     });
   }
 
@@ -1101,7 +1238,36 @@ export default function NovelReaderScreen() {
           <Text style={styles.loadingText}>本文を読み込み中…</Text>
         </View>
       ) : readerContent ? (
-        <ScrollView
+        settings.layout === 'vertical' ? (
+          <VerticalReaderView
+            authorName={detail?.user.name ?? null}
+            background={palette.background}
+            blocks={blocks}
+            embeddedImages={readerContent.embeddedImages}
+            fontSize={fontSize}
+            initialProgress={verticalInitialProgressRef.current}
+            lineHeight={lineHeight}
+            meta={
+              detail
+                ? `${detail.textLength.toLocaleString()}字 ・ ${new Date(
+                    detail.createDate,
+                  ).toLocaleDateString('ja-JP')}`
+                : null
+            }
+            muted={palette.muted}
+            onBlockChange={setVerticalBlockIndex}
+            onProgress={(progress) => {
+              setScrollProgress(progress);
+              scheduleProgressSave(progress, 0);
+            }}
+            ref={verticalReaderRef}
+            seriesTitle={readerContent.seriesTitle ?? null}
+            text={palette.text}
+            title={readerContent.title ?? detail?.title ?? '無題'}
+            toolbar={palette.border}
+          />
+        ) : (
+          <ScrollView
           contentContainerStyle={styles.readerContent}
           onContentSizeChange={restoreReadingPosition}
           onScroll={handleScroll}
@@ -1166,7 +1332,18 @@ export default function NovelReaderScreen() {
           <View
             onLayout={(event) => {
               const { height, y } = event.nativeEvent.layout;
-              readerEndOffsetRef.current = y + height;
+              const readerEndOffset = y + height;
+              readerEndOffsetRef.current = readerEndOffset;
+              const pendingProgress = pendingHorizontalProgressRef.current;
+              if (pendingProgress !== null) {
+                pendingHorizontalProgressRef.current = null;
+                requestAnimationFrame(() => {
+                  scrollViewRef.current?.scrollTo({
+                    animated: false,
+                    y: Math.max(0, readerEndOffset * pendingProgress),
+                  });
+                });
+              }
             }}
             style={styles.readerEnd}
           >
@@ -1263,7 +1440,8 @@ export default function NovelReaderScreen() {
             styles={styles}
             title="ディスカバリー"
           />
-        </ScrollView>
+          </ScrollView>
+        )
       ) : (
         <View style={styles.centered}>
           <Text style={styles.errorTitle}>本文を表示できませんでした</Text>
@@ -1312,12 +1490,17 @@ export default function NovelReaderScreen() {
         background={palette.toolbar}
         border={palette.border}
         currentNovelId={novelId}
+        downloadProgress={seriesDownloadProgress}
         error={seriesError}
+        isDownloading={isSeriesDownloading}
         isLoading={isSeriesLoading}
         muted={palette.muted}
         novels={seriesNovels}
         onClose={() => {
           setIsSeriesVisible(false);
+        }}
+        onDownloadAll={() => {
+          void downloadEntireSeries();
         }}
         onNovelPress={openSeriesNovel}
         onRetry={() => {
@@ -1358,6 +1541,20 @@ export default function NovelReaderScreen() {
         overlay={palette.overlay}
         text={palette.text}
         visible={isMarksVisible}
+      />
+
+      <ReaderSpeechModal
+        accent={palette.accent}
+        background={palette.toolbar}
+        border={palette.border}
+        chunks={speechChunks}
+        muted={palette.muted}
+        onClose={() => setIsSpeechVisible(false)}
+        onJump={jumpToBlock}
+        overlay={palette.overlay}
+        startBlockIndex={currentMarkBlockIndex}
+        text={palette.text}
+        visible={isSpeechVisible}
       />
 
       <RecommendationExclusionsModal
@@ -1456,6 +1653,12 @@ export default function NovelReaderScreen() {
           setIsMoreVisible(false);
           requestAnimationFrame(() => {
             setIsSettingsVisible(true);
+          });
+        }}
+        onOpenSpeech={() => {
+          setIsMoreVisible(false);
+          requestAnimationFrame(() => {
+            setIsSpeechVisible(true);
           });
         }}
         onReload={() => {
@@ -1973,6 +2176,11 @@ function ReaderSettingsModal({
             </Pressable>
           </View>
 
+          <ScrollView
+            contentContainerStyle={styles.settingsContent}
+            showsVerticalScrollIndicator={false}
+            style={styles.settingsScroll}
+          >
           <Text style={styles.sectionLabel}>テーマ</Text>
           <View style={styles.themeRow}>
             {THEME_OPTIONS.map((option) => {
@@ -2010,6 +2218,26 @@ function ReaderSettingsModal({
                 </Pressable>
               );
             })}
+          </View>
+
+          <Text style={styles.sectionLabel}>組版</Text>
+          <View style={styles.layoutOptions}>
+            <RadioOption
+              active={settings.layout === 'horizontal'}
+              label="横書き"
+              onPress={() => {
+                onChange({ ...settings, layout: 'horizontal' });
+              }}
+              palette={palette}
+            />
+            <RadioOption
+              active={settings.layout === 'vertical'}
+              label="縦書き"
+              onPress={() => {
+                onChange({ ...settings, layout: 'vertical' });
+              }}
+              palette={palette}
+            />
           </View>
 
           <View style={styles.optionColumns}>
@@ -2061,6 +2289,7 @@ function ReaderSettingsModal({
               />
             </View>
           </View>
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -2117,6 +2346,7 @@ interface MoreActionsModalProps {
   onOpenPixiv: () => void;
   onOpenSeries: () => void;
   onOpenSettings: () => void;
+  onOpenSpeech: () => void;
   onReload: () => void;
   onReturn: () => void;
   onToggleOffline: () => void;
@@ -2140,6 +2370,7 @@ function MoreActionsModal({
   onOpenPixiv,
   onOpenSeries,
   onOpenSettings,
+  onOpenSpeech,
   onReload,
   onReturn,
   onToggleOffline,
@@ -2171,8 +2402,13 @@ function MoreActionsModal({
             style={styles.actionList}
           >
             <SheetAction
-              label="Aa  表示設定"
+            label="Aa  表示設定"
             onPress={onOpenSettings}
+            palette={palette}
+          />
+          <SheetAction
+            label="読み上げ"
+            onPress={onOpenSpeech}
             palette={palette}
           />
           <SheetAction
@@ -2286,6 +2522,10 @@ function isReaderFontSize(value: unknown): value is ReaderFontSize {
 
 function isReaderLineSpacing(value: unknown): value is ReaderLineSpacing {
   return value === 'narrow' || value === 'wide';
+}
+
+function isReaderLayout(value: unknown): value is ReaderLayout {
+  return value === 'horizontal' || value === 'vertical';
 }
 
 function toErrorMessage(error: unknown): string {
@@ -2802,6 +3042,7 @@ function createSheetStyles(palette: ReaderPalette) {
     sheet: {
       width: '100%',
       maxWidth: 620,
+      maxHeight: '92%',
       alignSelf: 'center',
       gap: 16,
       paddingHorizontal: 22,
@@ -2852,6 +3093,13 @@ function createSheetStyles(palette: ReaderPalette) {
       fontSize: 12,
       fontWeight: '700',
     },
+    settingsScroll: {
+      flexShrink: 1,
+    },
+    settingsContent: {
+      gap: 16,
+      paddingBottom: 4,
+    },
     actionList: {
       flexShrink: 1,
     },
@@ -2892,6 +3140,11 @@ function createSheetStyles(palette: ReaderPalette) {
     themeOptionText: {
       fontSize: 18,
       fontWeight: '600',
+    },
+    layoutOptions: {
+      flexDirection: 'row',
+      gap: 24,
+      paddingVertical: 2,
     },
     optionColumns: {
       flexDirection: 'row',

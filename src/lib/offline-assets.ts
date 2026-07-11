@@ -49,7 +49,7 @@ export async function localizeNovelImages(
       });
 
       if (result.status < 200 || result.status >= 300) {
-        throw new Error(`挿絵 ${imageId} の保存に失敗したよ (${result.status})`);
+        throw new Error(`挿絵 ${imageId} の保存に失敗しました (${result.status})`);
       }
 
       localizedImages[imageId] = result.uri;
