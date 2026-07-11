@@ -1,10 +1,14 @@
+import type { PixivNovelItem } from '@book000/pixivts';
 import * as SecureStore from 'expo-secure-store';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,343 +17,1097 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { PixivNovelItem } from '@book000/pixivts';
-
+import { NovelCard } from '@/components/novel-card';
+import { NovelDetailModal } from '@/components/novel-detail-modal';
 import { PixivLoginModal } from '@/components/pixiv-login-modal';
-import { connectAndFetchNovelRanking } from '@/lib/pixiv';
+import {
+  connectPixiv,
+  disconnectPixiv,
+  fetchBookmarkedNovels,
+  fetchNovelRanking,
+  fetchRecommendedNovels,
+  searchNovels,
+  type BookmarkVisibility,
+  type NovelPageResult,
+  type NovelRanking,
+  type NovelSearchSort,
+  type NovelSearchTarget,
+} from '@/lib/pixiv';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 
+type AppTab = 'recommended' | 'bookmarks' | 'ranking' | 'search';
+
+interface FeedState {
+  novels: PixivNovelItem[];
+  nextUrl: string | null;
+  hasLoaded: boolean;
+  isLoading: boolean;
+  isLoadingMore: boolean;
+  error: string | null;
+}
+
+const EMPTY_FEED: FeedState = {
+  novels: [],
+  nextUrl: null,
+  hasLoaded: false,
+  isLoading: false,
+  isLoadingMore: false,
+  error: null,
+};
+
+const TAB_ITEMS: { key: AppTab; label: string; icon: string }[] = [
+  { key: 'recommended', label: 'おすすめ', icon: '✦' },
+  { key: 'bookmarks', label: 'ブックマーク', icon: '🔖' },
+  { key: 'ranking', label: 'ランキング', icon: '🏆' },
+  { key: 'search', label: '検索', icon: '🔎' },
+];
+
+const RANKING_OPTIONS: { value: NovelRanking; label: string }[] = [
+  { value: 'day', label: 'デイリー' },
+  { value: 'week', label: '週間' },
+  { value: 'day_male', label: '男性向け' },
+  { value: 'day_female', label: '女性向け' },
+  { value: 'week_rookie', label: 'ルーキー' },
+  { value: 'day_r18', label: 'R-18デイリー' },
+  { value: 'week_r18', label: 'R-18週間' },
+  { value: 'day_r18_ai', label: 'R-18 AI' },
+];
+
+const SEARCH_SORT_OPTIONS: { value: NovelSearchSort; label: string }[] = [
+  { value: 'date_desc', label: '新しい順' },
+  { value: 'date_asc', label: '古い順' },
+  { value: 'popular_desc', label: '人気順' },
+];
+
+const SEARCH_TARGET_OPTIONS: { value: NovelSearchTarget; label: string }[] = [
+  { value: 'keyword', label: 'キーワード' },
+  { value: 'partial_match_for_tags', label: 'タグを含む' },
+  { value: 'exact_match_for_tags', label: 'タグ完全一致' },
+  { value: 'title_and_caption', label: 'タイトル・説明' },
+];
+
 export default function HomeScreen() {
-  const [refreshToken, setRefreshToken] = useState('');
-  const [novels, setNovels] = useState<PixivNovelItem[]>([]);
-  const [status, setStatus] = useState('Pixivへログインして疎通確認しよう');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isTokenLoaded, setIsTokenLoaded] = useState(false);
+  const [activeTab, setActiveTab] = useState<AppTab>('recommended');
+  const [feeds, setFeeds] = useState<Record<AppTab, FeedState>>({
+    recommended: { ...EMPTY_FEED },
+    bookmarks: { ...EMPTY_FEED },
+    ranking: { ...EMPTY_FEED },
+    search: { ...EMPTY_FEED },
+  });
+
+  const connectingRef = useRef(false);
+  const [isBooting, setIsBooting] = useState(true);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoginVisible, setIsLoginVisible] = useState(false);
+  const [isSettingsVisible, setIsSettingsVisible] = useState(false);
+  const [showManualToken, setShowManualToken] = useState(false);
+  const [manualToken, setManualToken] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
+
+  const [bookmarkVisibility, setBookmarkVisibility] =
+    useState<BookmarkVisibility>('public');
+  const [rankingMode, setRankingMode] = useState<NovelRanking>('day');
+  const [searchWord, setSearchWord] = useState('');
+  const [submittedSearchWord, setSubmittedSearchWord] = useState('');
+  const [searchSort, setSearchSort] =
+    useState<NovelSearchSort>('date_desc');
+  const [searchTarget, setSearchTarget] =
+    useState<NovelSearchTarget>('keyword');
+  const [selectedNovel, setSelectedNovel] = useState<PixivNovelItem | null>(
+    null,
+  );
+
+  const persistRefreshToken = useCallback(async (refreshToken: string) => {
+    await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
+  }, []);
+
+  const updateFeed = useCallback(
+    (tab: AppTab, updater: (current: FeedState) => FeedState) => {
+      setFeeds((current) => ({
+        ...current,
+        [tab]: updater(current[tab]),
+      }));
+    },
+    [],
+  );
+
+  const requestFeed = useCallback(
+    async (
+      tab: AppTab,
+      options?: {
+        append?: boolean;
+        bookmarkVisibility?: BookmarkVisibility;
+        rankingMode?: NovelRanking;
+        searchWord?: string;
+        searchSort?: NovelSearchSort;
+        searchTarget?: NovelSearchTarget;
+      },
+    ) => {
+      const append = options?.append ?? false;
+      const currentFeed = feeds[tab];
+
+      if (append && (!currentFeed.nextUrl || currentFeed.isLoadingMore)) {
+        return;
+      }
+
+      if (!append && currentFeed.isLoading) {
+        return;
+      }
+
+      updateFeed(tab, (current) => ({
+        ...current,
+        isLoading: !append,
+        isLoadingMore: append,
+        error: null,
+        ...(append ? {} : { novels: [], nextUrl: null }),
+      }));
+
+      try {
+        let result: NovelPageResult;
+        const nextUrl = append ? currentFeed.nextUrl : null;
+
+        switch (tab) {
+          case 'recommended':
+            result = await fetchRecommendedNovels(nextUrl);
+            break;
+          case 'bookmarks':
+            result = await fetchBookmarkedNovels(
+              options?.bookmarkVisibility ?? bookmarkVisibility,
+              nextUrl,
+            );
+            break;
+          case 'ranking':
+            result = await fetchNovelRanking(
+              options?.rankingMode ?? rankingMode,
+              nextUrl,
+            );
+            break;
+          case 'search': {
+            const word = options?.searchWord ?? submittedSearchWord;
+            result = await searchNovels(
+              word,
+              options?.searchSort ?? searchSort,
+              options?.searchTarget ?? searchTarget,
+              nextUrl,
+            );
+            break;
+          }
+        }
+
+        await persistRefreshToken(result.refreshToken);
+        updateFeed(tab, (current) => ({
+          novels: append
+            ? mergeNovels(current.novels, result.novels)
+            : result.novels,
+          nextUrl: result.nextUrl,
+          hasLoaded: true,
+          isLoading: false,
+          isLoadingMore: false,
+          error: null,
+        }));
+      } catch (error) {
+        updateFeed(tab, (current) => ({
+          ...current,
+          hasLoaded: true,
+          isLoading: false,
+          isLoadingMore: false,
+          error: toErrorMessage(error),
+        }));
+      }
+    },
+    [
+      bookmarkVisibility,
+      feeds,
+      persistRefreshToken,
+      rankingMode,
+      searchSort,
+      searchTarget,
+      submittedSearchWord,
+      updateFeed,
+    ],
+  );
+
+  const connectWithToken = useCallback(
+    async (token: string) => {
+      if (connectingRef.current) {
+        return;
+      }
+
+      connectingRef.current = true;
+      setIsConnecting(true);
+      setAuthError(null);
+
+      try {
+        const session = await connectPixiv(token);
+        await persistRefreshToken(session.refreshToken);
+        setUserId(session.userId);
+        setIsAuthenticated(true);
+        setIsLoginVisible(false);
+        setManualToken('');
+
+        const recommended = await fetchRecommendedNovels();
+        await persistRefreshToken(recommended.refreshToken);
+        updateFeed('recommended', () => ({
+          novels: recommended.novels,
+          nextUrl: recommended.nextUrl,
+          hasLoaded: true,
+          isLoading: false,
+          isLoadingMore: false,
+          error: null,
+        }));
+      } catch (error) {
+        disconnectPixiv();
+        await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY).catch(() => {});
+        setIsAuthenticated(false);
+        setUserId(null);
+        setAuthError(toErrorMessage(error));
+      } finally {
+        connectingRef.current = false;
+        setIsConnecting(false);
+        setIsBooting(false);
+      }
+    }, [persistRefreshToken, updateFeed],
+  );
 
   useEffect(() => {
     let isMounted = true;
 
-    async function loadSavedToken() {
+    async function restoreSession() {
       try {
         const savedToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
 
-        if (isMounted && savedToken) {
-          setRefreshToken(savedToken);
-          setStatus('保存済みのログイン情報を読み込んだよ');
+        if (!isMounted) {
+          return;
         }
-      } catch {
-        if (isMounted) {
-          setStatus('SecureStoreを読めなかったので、もう一度ログインしてね');
+
+        if (savedToken) {
+          await connectWithToken(savedToken);
+        } else {
+          setIsBooting(false);
         }
-      } finally {
+      } catch (error) {
         if (isMounted) {
-          setIsTokenLoaded(true);
+          setAuthError(toErrorMessage(error));
+          setIsBooting(false);
         }
       }
     }
 
-    void loadSavedToken();
+    void restoreSession();
 
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [connectWithToken]);
 
-  async function connectWithToken(token: string) {
-    if (isLoading) {
+  async function handleLogout() {
+    disconnectPixiv();
+    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY).catch(() => {});
+    setIsSettingsVisible(false);
+    setIsAuthenticated(false);
+    setUserId(null);
+    setAuthError(null);
+    setFeeds({
+      recommended: { ...EMPTY_FEED },
+      bookmarks: { ...EMPTY_FEED },
+      ranking: { ...EMPTY_FEED },
+      search: { ...EMPTY_FEED },
+    });
+  }
+
+  function selectTab(tab: AppTab) {
+    setActiveTab(tab);
+
+    if (tab !== 'search' && !feeds[tab].hasLoaded) {
+      void requestFeed(tab);
+    }
+  }
+
+  function submitSearch(
+    sort: NovelSearchSort = searchSort,
+    target: NovelSearchTarget = searchTarget,
+  ) {
+    const word = searchWord.trim();
+
+    if (word.length === 0) {
+      updateFeed('search', (current) => ({
+        ...current,
+        error: '検索語を入力してね',
+      }));
       return;
     }
 
-    setIsLoading(true);
-    setNovels([]);
-    setStatus('Pixivへ接続中…');
-
-    try {
-      const result = await connectAndFetchNovelRanking(token);
-
-      await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, result.refreshToken);
-      setRefreshToken(result.refreshToken);
-      setNovels(result.novels.slice(0, 10));
-      setStatus(
-        `接続成功！ userId=${result.userId} / 小説ランキング${result.novels.length}件を取得`,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus(`接続失敗: ${message}`);
-    } finally {
-      setIsLoading(false);
-    }
+    setSubmittedSearchWord(word);
+    void requestFeed('search', {
+      searchWord: word,
+      searchSort: sort,
+      searchTarget: target,
+    });
   }
 
-  async function handleWebViewLoginSuccess(token: string) {
-    setIsLoginVisible(false);
-    setRefreshToken(token);
-    await connectWithToken(token);
+  const handleNovelChanged = useCallback((changedNovel: PixivNovelItem) => {
+    setSelectedNovel(changedNovel);
+    setFeeds((current) => {
+      const next = { ...current };
+
+      for (const tab of Object.keys(next) as AppTab[]) {
+        next[tab] = {
+          ...next[tab],
+          novels: next[tab].novels.map((item) =>
+            item.id === changedNovel.id ? changedNovel : item,
+          ),
+        };
+      }
+
+      return next;
+    });
+  }, []);
+
+  const activeFeed = feeds[activeTab];
+  const headerTitle = useMemo(() => {
+    switch (activeTab) {
+      case 'recommended':
+        return 'おすすめ小説';
+      case 'bookmarks':
+        return 'マイブックマーク';
+      case 'ranking':
+        return '小説ランキング';
+      case 'search':
+        return submittedSearchWord
+          ? `「${submittedSearchWord}」の検索結果`
+          : '小説を検索';
+    }
+  }, [activeTab, submittedSearchWord]);
+
+  if (isBooting) {
+    return (
+      <SafeAreaView style={styles.centeredScreen}>
+        <ActivityIndicator color="#0096FA" size="large" />
+        <Text style={styles.bootTitle}>Pixiv Novel Reader</Text>
+        <Text style={styles.bootText}>保存済みログインを確認してる…</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <SafeAreaView style={styles.loginSafeArea}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.flex}
+        >
+          <ScrollView
+            contentContainerStyle={styles.loginContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.loginHero}>
+              <Text style={styles.eyebrow}>PIXIV NOVEL READER</Text>
+              <Text style={styles.loginTitle}>Pixiv小説を、読むためのアプリ。</Text>
+              <Text style={styles.loginDescription}>
+                おすすめ、マイブックマーク、ランキング、検索、本文閲覧をひとつに。
+              </Text>
+            </View>
+
+            <View style={styles.loginCard}>
+              <Text style={styles.loginCardTitle}>Pixivへログイン</Text>
+              <Text style={styles.loginCardDescription}>
+                IDとパスワードはPixivのページへ直接入力される。アプリが保存するのはrefresh tokenだけ。
+              </Text>
+
+              <Pressable
+                accessibilityRole="button"
+                disabled={isConnecting}
+                onPress={() => {
+                  setIsLoginVisible(true);
+                }}
+                style={({ pressed }) => [
+                  styles.loginButton,
+                  pressed && styles.pressed,
+                  isConnecting && styles.disabled,
+                ]}
+              >
+                {isConnecting ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.loginButtonText}>Pixivでログイン</Text>
+                )}
+              </Pressable>
+
+              {authError && (
+                <View style={styles.authErrorCard}>
+                  <Text style={styles.authErrorText}>{authError}</Text>
+                </View>
+              )}
+
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setShowManualToken((current) => !current);
+                }}
+                style={styles.manualToggle}
+              >
+                <Text style={styles.manualToggleText}>
+                  {showManualToken ? '手動入力を閉じる' : 'WebViewが使えない場合'}
+                </Text>
+              </Pressable>
+
+              {showManualToken && (
+                <View style={styles.manualArea}>
+                  <TextInput
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!isConnecting}
+                    onChangeText={setManualToken}
+                    placeholder="refresh tokenを貼り付け"
+                    placeholderTextColor="#8D96A0"
+                    secureTextEntry
+                    selectionColor="#0096FA"
+                    style={styles.input}
+                    value={manualToken}
+                  />
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isConnecting || manualToken.trim().length === 0}
+                    onPress={() => {
+                      void connectWithToken(manualToken);
+                    }}
+                    style={({ pressed }) => [
+                      styles.manualButton,
+                      pressed && styles.pressed,
+                      (isConnecting || manualToken.trim().length === 0) &&
+                        styles.disabled,
+                    ]}
+                  >
+                    <Text style={styles.manualButtonText}>tokenで接続</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+
+        {isLoginVisible && (
+          <PixivLoginModal
+            onClose={() => {
+              setIsLoginVisible(false);
+            }}
+            onSuccess={(token) => connectWithToken(token)}
+          />
+        )}
+      </SafeAreaView>
+    );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.keyboardAvoidingView}
-      >
-        <ScrollView
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.hero}>
-            <Text style={styles.eyebrow}>PIXIV NOVEL READER</Text>
-            <Text style={styles.title}>Pixiv小説を、読むためのアプリ。</Text>
-            <Text style={styles.description}>
-              アプリ内のPixivログイン画面から認証して、小説ランキングを取得する。
-            </Text>
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Pixivアカウント</Text>
-            <Text style={styles.cardDescription}>
-              IDとパスワードはPixivのWebViewへ直接入力される。アプリが保存するのはrefresh tokenだけ。
-            </Text>
-
-            <Pressable
-              accessibilityRole="button"
-              disabled={isLoading || !isTokenLoaded}
-              onPress={() => {
-                setIsLoginVisible(true);
-              }}
-              style={({ pressed }) => [
-                styles.loginButton,
-                pressed && styles.buttonPressed,
-                (isLoading || !isTokenLoaded) && styles.buttonDisabled,
-              ]}
-            >
-              <Text style={styles.loginButtonText}>Pixivでログイン</Text>
-            </Pressable>
-
-            {refreshToken.length > 0 && (
-              <Pressable
-                accessibilityRole="button"
-                disabled={isLoading}
-                onPress={() => {
-                  void connectWithToken(refreshToken);
-                }}
-                style={({ pressed }) => [
-                  styles.secondaryButton,
-                  pressed && styles.buttonPressed,
-                  isLoading && styles.buttonDisabled,
-                ]}
-              >
-                {isLoading ? (
-                  <ActivityIndicator color="#0096FA" />
-                ) : (
-                  <Text style={styles.secondaryButtonText}>
-                    保存済みログインで再接続
-                  </Text>
-                )}
-              </Pressable>
-            )}
-
-            <Text style={styles.status}>{status}</Text>
-          </View>
-
-          <View style={styles.fallbackCard}>
-            <Text style={styles.fallbackTitle}>手動token入力</Text>
-            <Text style={styles.fallbackDescription}>
-              WebViewログインが使えない場合だけ使う予備ルート。
-            </Text>
-            <TextInput
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!isLoading && isTokenLoaded}
-              onChangeText={setRefreshToken}
-              placeholder="refresh tokenを貼り付け"
-              placeholderTextColor="#8D96A0"
-              secureTextEntry
-              selectionColor="#0096FA"
-              style={styles.input}
-              value={refreshToken}
-            />
-            <Pressable
-              accessibilityRole="button"
-              disabled={isLoading || refreshToken.trim().length === 0}
-              onPress={() => {
-                void connectWithToken(refreshToken);
-              }}
-              style={({ pressed }) => [
-                styles.manualButton,
-                pressed && styles.buttonPressed,
-                (isLoading || refreshToken.trim().length === 0) &&
-                  styles.buttonDisabled,
-              ]}
-            >
-              <Text style={styles.manualButtonText}>tokenで接続</Text>
-            </Pressable>
-          </View>
-
-          {novels.length > 0 && (
-            <View style={styles.resultsSection}>
-              <Text style={styles.sectionTitle}>デイリーランキング</Text>
-
-              {novels.map((novel, index) => (
-                <View key={novel.id} style={styles.novelCard}>
-                  <View style={styles.rankBadge}>
-                    <Text style={styles.rankText}>{index + 1}</Text>
-                  </View>
-
-                  <View style={styles.novelBody}>
-                    <Text numberOfLines={2} style={styles.novelTitle}>
-                      {novel.title}
-                    </Text>
-                    <Text numberOfLines={1} style={styles.author}>
-                      {novel.user.name}
-                    </Text>
-                    <Text style={styles.metadata}>
-                      {novel.textLength.toLocaleString()}文字・♡
-                      {novel.totalBookmarks.toLocaleString()}
-                    </Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          )}
-        </ScrollView>
-      </KeyboardAvoidingView>
-
-      {isLoginVisible && (
-        <PixivLoginModal
-          onClose={() => {
-            setIsLoginVisible(false);
+    <SafeAreaView style={styles.appSafeArea} edges={['top', 'left', 'right']}>
+      <View style={styles.appHeader}>
+        <View style={styles.appHeaderText}>
+          <Text style={styles.appEyebrow}>PIXIV NOVELS</Text>
+          <Text style={styles.appTitle}>{headerTitle}</Text>
+        </View>
+        <Pressable
+          accessibilityLabel="設定"
+          accessibilityRole="button"
+          onPress={() => {
+            setIsSettingsVisible(true);
           }}
-          onSuccess={handleWebViewLoginSuccess}
+          style={({ pressed }) => [
+            styles.settingsButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.settingsButtonText}>⚙</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.tabBar}>
+        {TAB_ITEMS.map((tab) => {
+          const isActive = tab.key === activeTab;
+
+          return (
+            <Pressable
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              key={tab.key}
+              onPress={() => {
+                selectTab(tab.key);
+              }}
+              style={({ pressed }) => [
+                styles.tabButton,
+                isActive && styles.tabButtonActive,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.tabIcon}>{tab.icon}</Text>
+              <Text
+                numberOfLines={1}
+                style={[styles.tabLabel, isActive && styles.tabLabelActive]}
+              >
+                {tab.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <FlatList
+        contentContainerStyle={styles.listContent}
+        data={activeFeed.novels}
+        ItemSeparatorComponent={ListSeparator}
+        keyboardShouldPersistTaps="handled"
+        keyExtractor={(item) => String(item.id)}
+        ListEmptyComponent={
+          <EmptyFeed
+            error={activeFeed.error}
+            isLoading={activeFeed.isLoading}
+            tab={activeTab}
+          />
+        }
+        ListFooterComponent={
+          <FeedFooter
+            hasMore={Boolean(activeFeed.nextUrl)}
+            isLoadingMore={activeFeed.isLoadingMore}
+            onLoadMore={() => {
+              void requestFeed(activeTab, { append: true });
+            }}
+          />
+        }
+        ListHeaderComponent={
+          <FeedControls
+            activeTab={activeTab}
+            bookmarkVisibility={bookmarkVisibility}
+            onBookmarkVisibilityChange={(visibility) => {
+              setBookmarkVisibility(visibility);
+              void requestFeed('bookmarks', {
+                bookmarkVisibility: visibility,
+              });
+            }}
+            onRankingModeChange={(mode) => {
+              setRankingMode(mode);
+              void requestFeed('ranking', { rankingMode: mode });
+            }}
+            onSearch={() => {
+              submitSearch();
+            }}
+            onSearchSortChange={(sort) => {
+              setSearchSort(sort);
+
+              if (searchWord.trim().length > 0) {
+                submitSearch(sort, searchTarget);
+              }
+            }}
+            onSearchTargetChange={(target) => {
+              setSearchTarget(target);
+
+              if (searchWord.trim().length > 0) {
+                submitSearch(searchSort, target);
+              }
+            }}
+            rankingMode={rankingMode}
+            searchSort={searchSort}
+            searchTarget={searchTarget}
+            searchWord={searchWord}
+            setSearchWord={setSearchWord}
+          />
+        }
+        onEndReached={() => {
+          if (activeFeed.nextUrl && !activeFeed.isLoadingMore) {
+            void requestFeed(activeTab, { append: true });
+          }
+        }}
+        onEndReachedThreshold={0.35}
+        refreshControl={
+          <RefreshControl
+            colors={['#0096FA']}
+            onRefresh={() => {
+              if (activeTab === 'search' && !submittedSearchWord) {
+                return;
+              }
+
+              void requestFeed(activeTab);
+            }}
+            refreshing={activeFeed.isLoading && activeFeed.hasLoaded}
+            tintColor="#0096FA"
+          />
+        }
+        renderItem={({ item, index }) => (
+          <NovelCard
+            novel={item}
+            onPress={() => {
+              setSelectedNovel(item);
+            }}
+            rank={activeTab === 'ranking' ? index + 1 : undefined}
+          />
+        )}
+      />
+
+      {selectedNovel && (
+        <NovelDetailModal
+          novel={selectedNovel}
+          onClose={() => {
+            setSelectedNovel(null);
+          }}
+          onNovelChanged={handleNovelChanged}
+          onRefreshToken={persistRefreshToken}
         />
       )}
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => {
+          setIsSettingsVisible(false);
+        }}
+        transparent
+        visible={isSettingsVisible}
+      >
+        <Pressable
+          onPress={() => {
+            setIsSettingsVisible(false);
+          }}
+          style={styles.modalBackdrop}
+        >
+          <Pressable onPress={() => {}} style={styles.settingsCard}>
+            <Text style={styles.settingsTitle}>アカウント</Text>
+            <Text style={styles.settingsDescription}>
+              Pixivへ接続済み · userId {userId}
+            </Text>
+            <Text style={styles.settingsNote}>
+              ログアウトすると、端末に保存した認証情報を削除するよ。
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                void handleLogout();
+              }}
+              style={({ pressed }) => [
+                styles.logoutButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.logoutButtonText}>ログアウト</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
 
+interface FeedControlsProps {
+  activeTab: AppTab;
+  bookmarkVisibility: BookmarkVisibility;
+  rankingMode: NovelRanking;
+  searchWord: string;
+  searchSort: NovelSearchSort;
+  searchTarget: NovelSearchTarget;
+  setSearchWord: (value: string) => void;
+  onBookmarkVisibilityChange: (value: BookmarkVisibility) => void;
+  onRankingModeChange: (value: NovelRanking) => void;
+  onSearchSortChange: (value: NovelSearchSort) => void;
+  onSearchTargetChange: (value: NovelSearchTarget) => void;
+  onSearch: () => void;
+}
+
+function FeedControls({
+  activeTab,
+  bookmarkVisibility,
+  rankingMode,
+  searchWord,
+  searchSort,
+  searchTarget,
+  setSearchWord,
+  onBookmarkVisibilityChange,
+  onRankingModeChange,
+  onSearchSortChange,
+  onSearchTargetChange,
+  onSearch,
+}: FeedControlsProps) {
+  if (activeTab === 'recommended') {
+    return (
+      <View style={styles.feedIntro}>
+        <Text style={styles.feedIntroTitle}>君向けの小説</Text>
+        <Text style={styles.feedIntroText}>
+          Pixivのおすすめを小説だけに絞って表示してる。
+        </Text>
+      </View>
+    );
+  }
+
+  if (activeTab === 'bookmarks') {
+    return (
+      <View style={styles.controlsBlock}>
+        <Text style={styles.controlLabel}>ブックマークの公開範囲</Text>
+        <View style={styles.chipRow}>
+          <FilterChip
+            active={bookmarkVisibility === 'public'}
+            label="公開"
+            onPress={() => {
+              onBookmarkVisibilityChange('public');
+            }}
+          />
+          <FilterChip
+            active={bookmarkVisibility === 'private'}
+            label="非公開"
+            onPress={() => {
+              onBookmarkVisibilityChange('private');
+            }}
+          />
+        </View>
+      </View>
+    );
+  }
+
+  if (activeTab === 'ranking') {
+    return (
+      <View style={styles.controlsBlock}>
+        <Text style={styles.controlLabel}>ランキング種別</Text>
+        <ScrollView
+          contentContainerStyle={styles.horizontalChips}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+        >
+          {RANKING_OPTIONS.map((option) => (
+            <FilterChip
+              active={rankingMode === option.value}
+              key={option.value}
+              label={option.label}
+              onPress={() => {
+                onRankingModeChange(option.value);
+              }}
+            />
+          ))}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.searchControls}>
+      <View style={styles.searchRow}>
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setSearchWord}
+          onSubmitEditing={onSearch}
+          placeholder="タイトル・タグ・キーワード"
+          placeholderTextColor="#89949E"
+          returnKeyType="search"
+          selectionColor="#0096FA"
+          style={styles.searchInput}
+          value={searchWord}
+        />
+        <Pressable
+          accessibilityRole="button"
+          onPress={onSearch}
+          style={({ pressed }) => [
+            styles.searchButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.searchButtonText}>検索</Text>
+        </Pressable>
+      </View>
+      <Text style={styles.controlLabel}>検索対象</Text>
+      <ScrollView
+        contentContainerStyle={styles.horizontalChips}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+      >
+        {SEARCH_TARGET_OPTIONS.map((option) => (
+          <FilterChip
+            active={searchTarget === option.value}
+            key={option.value}
+            label={option.label}
+            onPress={() => {
+              onSearchTargetChange(option.value);
+            }}
+          />
+        ))}
+      </ScrollView>
+      <Text style={styles.controlLabel}>並び順</Text>
+      <ScrollView
+        contentContainerStyle={styles.horizontalChips}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+      >
+        {SEARCH_SORT_OPTIONS.map((option) => (
+          <FilterChip
+            active={searchSort === option.value}
+            key={option.value}
+            label={option.label}
+            onPress={() => {
+              onSearchSortChange(option.value);
+            }}
+          />
+        ))}
+      </ScrollView>
+      {searchSort === 'popular_desc' && (
+        <Text style={styles.premiumNote}>人気順はPixiv Premium限定の場合があるよ。</Text>
+      )}
+    </View>
+  );
+}
+
+function FilterChip({
+  active,
+  label,
+  onPress,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.filterChip,
+        active && styles.filterChipActive,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text
+        style={[styles.filterChipText, active && styles.filterChipTextActive]}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function EmptyFeed({
+  error,
+  isLoading,
+  tab,
+}: {
+  error: string | null;
+  isLoading: boolean;
+  tab: AppTab;
+}) {
+  if (isLoading) {
+    return (
+      <View style={styles.emptyState}>
+        <ActivityIndicator color="#0096FA" size="large" />
+        <Text style={styles.emptyTitle}>小説を読み込んでる…</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.emptyState}>
+        <Text style={styles.emptyEmoji}>⚠️</Text>
+        <Text style={styles.emptyTitle}>取得できなかった</Text>
+        <Text style={styles.emptyText}>{error}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.emptyState}>
+      <Text style={styles.emptyEmoji}>{tab === 'search' ? '🔎' : '📚'}</Text>
+      <Text style={styles.emptyTitle}>
+        {tab === 'search' ? '読みたい小説を検索しよう' : '小説が見つからなかった'}
+      </Text>
+      <Text style={styles.emptyText}>
+        {tab === 'bookmarks'
+          ? '公開／非公開を切り替えて確認してみてね。'
+          : tab === 'search'
+            ? 'キーワードを入れて検索ボタンを押してね。'
+            : '条件を変えるか、少し時間を置いて更新してみてね。'}
+      </Text>
+    </View>
+  );
+}
+
+function FeedFooter({
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
+}: {
+  hasMore: boolean;
+  isLoadingMore: boolean;
+  onLoadMore: () => void;
+}) {
+  if (isLoadingMore) {
+    return (
+      <View style={styles.footerLoading}>
+        <ActivityIndicator color="#0096FA" />
+        <Text style={styles.footerText}>続きを読み込んでる…</Text>
+      </View>
+    );
+  }
+
+  if (!hasMore) {
+    return <View style={styles.footerSpace} />;
+  }
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onLoadMore}
+      style={({ pressed }) => [
+        styles.loadMoreButton,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text style={styles.loadMoreText}>もっと見る</Text>
+    </Pressable>
+  );
+}
+
+function ListSeparator() {
+  return <View style={styles.separator} />;
+}
+
+function mergeNovels(
+  current: PixivNovelItem[],
+  incoming: PixivNovelItem[],
+): PixivNovelItem[] {
+  const items = new Map<number, PixivNovelItem>();
+
+  for (const novel of [...current, ...incoming]) {
+    items.set(novel.id, novel);
+  }
+
+  return [...items.values()];
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const styles = StyleSheet.create({
-  safeArea: {
+  flex: {
+    flex: 1,
+  },
+  centeredScreen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 28,
+    backgroundColor: '#F4F7FA',
+  },
+  bootTitle: {
+    marginTop: 6,
+    color: '#20262E',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  bootText: {
+    color: '#697580',
+    fontSize: 13,
+  },
+  loginSafeArea: {
     flex: 1,
     backgroundColor: '#F4F7FA',
   },
-  keyboardAvoidingView: {
-    flex: 1,
-  },
-  content: {
+  loginContent: {
     width: '100%',
     maxWidth: 720,
     alignSelf: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 28,
-    paddingBottom: 120,
-    gap: 24,
+    paddingHorizontal: 22,
+    paddingTop: 44,
+    paddingBottom: 90,
+    gap: 30,
   },
-  hero: {
-    gap: 8,
+  loginHero: {
+    gap: 10,
   },
   eyebrow: {
     color: '#0096FA',
     fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 1.4,
+    fontWeight: '900',
+    letterSpacing: 1.5,
   },
-  title: {
+  loginTitle: {
     color: '#20262E',
-    fontSize: 30,
-    fontWeight: '800',
-    letterSpacing: -0.7,
-    lineHeight: 39,
+    fontSize: 31,
+    fontWeight: '900',
+    letterSpacing: -0.8,
+    lineHeight: 41,
   },
-  description: {
-    color: '#65717D',
+  loginDescription: {
+    color: '#63707C',
     fontSize: 15,
-    lineHeight: 23,
+    lineHeight: 24,
   },
-  card: {
-    padding: 18,
-    borderRadius: 20,
+  loginCard: {
+    gap: 14,
+    padding: 20,
+    borderRadius: 22,
     backgroundColor: '#FFFFFF',
-    gap: 13,
-    shadowColor: '#15202B',
-    shadowOffset: {
-      width: 0,
-      height: 5,
-    },
-    shadowOpacity: 0.07,
+    shadowColor: '#17212B',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.08,
     shadowRadius: 18,
     elevation: 3,
   },
-  cardTitle: {
+  loginCardTitle: {
     color: '#303842',
-    fontSize: 18,
-    fontWeight: '800',
+    fontSize: 20,
+    fontWeight: '900',
   },
-  cardDescription: {
+  loginCardDescription: {
     color: '#65717D',
     fontSize: 13,
-    lineHeight: 20,
+    lineHeight: 21,
   },
   loginButton: {
-    minHeight: 54,
+    minHeight: 56,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 14,
+    borderRadius: 15,
     backgroundColor: '#0096FA',
   },
   loginButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '900',
   },
-  secondaryButton: {
-    minHeight: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#A9DBFC',
-    borderRadius: 14,
-    backgroundColor: '#F2FAFF',
+  authErrorCard: {
+    padding: 13,
+    borderRadius: 12,
+    backgroundColor: '#FFF0F2',
   },
-  secondaryButtonText: {
-    color: '#0088E5',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  fallbackCard: {
-    padding: 17,
-    borderWidth: 1,
-    borderColor: '#DDE5EB',
-    borderRadius: 18,
-    backgroundColor: '#F9FBFC',
-    gap: 11,
-  },
-  fallbackTitle: {
-    color: '#3B4650',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  fallbackDescription: {
-    color: '#74808A',
+  authErrorText: {
+    color: '#C73848',
     fontSize: 12,
-    lineHeight: 18,
+    lineHeight: 19,
+  },
+  manualToggle: {
+    alignSelf: 'center',
+    padding: 6,
+  },
+  manualToggleText: {
+    color: '#75818C',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  manualArea: {
+    gap: 10,
   },
   input: {
     minHeight: 50,
     paddingHorizontal: 15,
     borderWidth: 1,
-    borderColor: '#D9E1E8',
+    borderColor: '#D7E0E7',
     borderRadius: 13,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F9FBFC',
     color: '#20262E',
-    fontSize: 15,
+    fontSize: 14,
   },
   manualButton: {
-    minHeight: 46,
+    minHeight: 47,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
+    borderRadius: 13,
     backgroundColor: '#35404A',
   },
   manualButtonText: {
@@ -357,62 +1115,285 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
-  buttonPressed: {
-    opacity: 0.78,
+  appSafeArea: {
+    flex: 1,
+    backgroundColor: '#F4F7FA',
   },
-  buttonDisabled: {
-    opacity: 0.55,
-  },
-  status: {
-    color: '#596570',
-    fontSize: 13,
-    lineHeight: 20,
-  },
-  resultsSection: {
-    gap: 12,
-  },
-  sectionTitle: {
-    color: '#20262E',
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  novelCard: {
+  appHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 13,
-    padding: 15,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 12,
   },
-  rankBadge: {
-    width: 38,
-    height: 38,
+  appHeaderText: {
+    flex: 1,
+    gap: 2,
+  },
+  appEyebrow: {
+    color: '#0096FA',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.3,
+  },
+  appTitle: {
+    color: '#20262E',
+    fontSize: 24,
+    fontWeight: '900',
+    letterSpacing: -0.4,
+  },
+  settingsButton: {
+    width: 43,
+    height: 43,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
-    backgroundColor: '#E5F5FF',
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
   },
-  rankText: {
-    color: '#0088E5',
+  settingsButtonText: {
+    color: '#43505C',
+    fontSize: 21,
+  },
+  tabBar: {
+    flexDirection: 'row',
+    gap: 5,
+    marginHorizontal: 12,
+    marginBottom: 8,
+    padding: 5,
+    borderRadius: 17,
+    backgroundColor: '#E6EDF3',
+  },
+  tabButton: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    paddingHorizontal: 3,
+    paddingVertical: 8,
+    borderRadius: 13,
+  },
+  tabButtonActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#1B2732',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  tabIcon: {
     fontSize: 15,
+  },
+  tabLabel: {
+    color: '#6D7984',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  tabLabelActive: {
+    color: '#007FC9',
+  },
+  listContent: {
+    width: '100%',
+    maxWidth: 760,
+    flexGrow: 1,
+    alignSelf: 'center',
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 70,
+  },
+  separator: {
+    height: 11,
+  },
+  feedIntro: {
+    gap: 4,
+    paddingHorizontal: 4,
+    paddingTop: 8,
+    paddingBottom: 17,
+  },
+  feedIntroTitle: {
+    color: '#303842',
+    fontSize: 16,
     fontWeight: '900',
   },
-  novelBody: {
-    flex: 1,
-    gap: 3,
-  },
-  novelTitle: {
-    color: '#252B33',
-    fontSize: 16,
-    fontWeight: '700',
-    lineHeight: 22,
-  },
-  author: {
-    color: '#66727E',
-    fontSize: 13,
-  },
-  metadata: {
-    color: '#8A949E',
+  feedIntroText: {
+    color: '#71808C',
     fontSize: 12,
+    lineHeight: 18,
+  },
+  controlsBlock: {
+    gap: 9,
+    paddingHorizontal: 3,
+    paddingTop: 8,
+    paddingBottom: 17,
+  },
+  controlLabel: {
+    color: '#52606C',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  chipRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  horizontalChips: {
+    gap: 8,
+    paddingRight: 14,
+  },
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderWidth: 1,
+    borderColor: '#D5DFE7',
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+  },
+  filterChipActive: {
+    borderColor: '#0096FA',
+    backgroundColor: '#0096FA',
+  },
+  filterChipText: {
+    color: '#62707C',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  filterChipTextActive: {
+    color: '#FFFFFF',
+  },
+  searchControls: {
+    gap: 10,
+    paddingTop: 8,
+    paddingBottom: 17,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 50,
+    paddingHorizontal: 15,
+    borderWidth: 1,
+    borderColor: '#D5DFE7',
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    color: '#20262E',
+    fontSize: 14,
+  },
+  searchButton: {
+    minWidth: 70,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    backgroundColor: '#0096FA',
+  },
+  searchButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  premiumNote: {
+    color: '#8B6A00',
+    fontSize: 11,
+  },
+  emptyState: {
+    flex: 1,
+    minHeight: 330,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 30,
+  },
+  emptyEmoji: {
+    fontSize: 34,
+  },
+  emptyTitle: {
+    color: '#303842',
+    fontSize: 17,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  emptyText: {
+    color: '#72808C',
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  footerLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 24,
+  },
+  footerText: {
+    color: '#72808C',
+    fontSize: 12,
+  },
+  footerSpace: {
+    height: 24,
+  },
+  loadMoreButton: {
+    alignItems: 'center',
+    marginTop: 15,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: '#A9DDFC',
+    borderRadius: 14,
+    backgroundColor: '#F1FAFF',
+  },
+  loadMoreText: {
+    color: '#0088DD',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  modalBackdrop: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    backgroundColor: 'rgba(17, 26, 35, 0.48)',
+  },
+  settingsCard: {
+    width: '100%',
+    maxWidth: 380,
+    gap: 12,
+    padding: 22,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+  },
+  settingsTitle: {
+    color: '#20262E',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  settingsDescription: {
+    color: '#52606C',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  settingsNote: {
+    color: '#7B8792',
+    fontSize: 12,
+    lineHeight: 19,
+  },
+  logoutButton: {
+    minHeight: 49,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+    borderRadius: 14,
+    backgroundColor: '#FFF0F2',
+  },
+  logoutButtonText: {
+    color: '#D13C4D',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  pressed: {
+    opacity: 0.72,
+  },
+  disabled: {
+    opacity: 0.52,
   },
 });

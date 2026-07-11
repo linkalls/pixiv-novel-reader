@@ -151,7 +151,7 @@ export function PixivLoginModal({
           </View>
         ) : session ? (
           <WebView
-            applicationNameForUserAgent="PixivNovelReader/1.0"
+            applicationNameForUserAgent="PixivNovelReader/1.1"
             domStorageEnabled
             javaScriptEnabled
             onError={({ nativeEvent }) => {
