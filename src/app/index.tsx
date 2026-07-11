@@ -1,5 +1,6 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import * as SecureStore from 'expo-secure-store';
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -17,9 +18,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { LibraryView } from '@/components/library-view';
 import { NovelCard } from '@/components/novel-card';
 import { NovelDetailModal } from '@/components/novel-detail-modal';
 import { PixivLoginModal } from '@/components/pixiv-login-modal';
+import { subscribeNovelChanged } from '@/lib/novel-events';
 import {
   connectPixiv,
   disconnectPixiv,
@@ -37,7 +40,12 @@ import { type AppColors, type ThemeMode, useAppTheme } from '@/theme';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 
-type AppTab = 'recommended' | 'bookmarks' | 'ranking' | 'search';
+type AppTab =
+  | 'recommended'
+  | 'bookmarks'
+  | 'ranking'
+  | 'search'
+  | 'library';
 
 interface FeedState {
   novels: PixivNovelItem[];
@@ -62,6 +70,7 @@ const TAB_ITEMS: { key: AppTab; label: string; icon: string }[] = [
   { key: 'bookmarks', label: 'ブックマーク', icon: '🔖' },
   { key: 'ranking', label: 'ランキング', icon: '🏆' },
   { key: 'search', label: '検索', icon: '🔎' },
+  { key: 'library', label: 'ライブラリ', icon: '▤' },
 ];
 
 const RANKING_OPTIONS: { value: NovelRanking; label: string }[] = [
@@ -95,6 +104,7 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
 ];
 
 export default function HomeScreen() {
+  const router = useRouter();
   const { colors, isDark, mode: themeMode, setMode: setThemeMode } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [activeTab, setActiveTab] = useState<AppTab>('recommended');
@@ -103,6 +113,7 @@ export default function HomeScreen() {
     bookmarks: { ...EMPTY_FEED },
     ranking: { ...EMPTY_FEED },
     search: { ...EMPTY_FEED },
+    library: { ...EMPTY_FEED, hasLoaded: true },
   });
 
   const connectingRef = useRef(false);
@@ -155,6 +166,10 @@ export default function HomeScreen() {
         searchTarget?: NovelSearchTarget;
       },
     ) => {
+      if (tab === 'library') {
+        return;
+      }
+
       const append = options?.append ?? false;
       const currentFeed = feeds[tab];
 
@@ -240,7 +255,12 @@ export default function HomeScreen() {
   );
 
   const connectWithToken = useCallback(
-    async (token: string) => {
+    async (
+      token: string,
+      options?: {
+        allowOffline?: boolean;
+      },
+    ) => {
       if (connectingRef.current) {
         return;
       }
@@ -269,10 +289,20 @@ export default function HomeScreen() {
         }));
       } catch (error) {
         disconnectPixiv();
-        await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY).catch(() => {});
-        setIsAuthenticated(false);
-        setUserId(null);
-        setAuthError(toErrorMessage(error));
+
+        if (options?.allowOffline) {
+          setIsAuthenticated(true);
+          setUserId(null);
+          setActiveTab('library');
+          setAuthError(
+            `Pixivへ接続できないためオフラインモードで開いたよ: ${toErrorMessage(error)}`,
+          );
+        } else {
+          await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY).catch(() => {});
+          setIsAuthenticated(false);
+          setUserId(null);
+          setAuthError(toErrorMessage(error));
+        }
       } finally {
         connectingRef.current = false;
         setIsConnecting(false);
@@ -293,7 +323,7 @@ export default function HomeScreen() {
         }
 
         if (savedToken) {
-          await connectWithToken(savedToken);
+          await connectWithToken(savedToken, { allowOffline: true });
         } else {
           setIsBooting(false);
         }
@@ -324,13 +354,14 @@ export default function HomeScreen() {
       bookmarks: { ...EMPTY_FEED },
       ranking: { ...EMPTY_FEED },
       search: { ...EMPTY_FEED },
+      library: { ...EMPTY_FEED, hasLoaded: true },
     });
   }
 
   function selectTab(tab: AppTab) {
     setActiveTab(tab);
 
-    if (tab !== 'search' && !feeds[tab].hasLoaded) {
+    if (tab !== 'search' && tab !== 'library' && !feeds[tab].hasLoaded) {
       void requestFeed(tab);
     }
   }
@@ -375,6 +406,8 @@ export default function HomeScreen() {
     });
   }, []);
 
+  useEffect(() => subscribeNovelChanged(handleNovelChanged), [handleNovelChanged]);
+
   const activeFeed = feeds[activeTab];
   const headerTitle = useMemo(() => {
     switch (activeTab) {
@@ -388,6 +421,8 @@ export default function HomeScreen() {
         return submittedSearchWord
           ? `「${submittedSearchWord}」の検索結果`
           : '小説を検索';
+      case 'library':
+        return '読書ライブラリ';
     }
   }, [activeTab, submittedSearchWord]);
 
@@ -532,6 +567,15 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
+      {userId === null && authError ? (
+        <View style={styles.offlineModeBanner}>
+          <Text style={styles.offlineModeTitle}>オフラインモード</Text>
+          <Text numberOfLines={2} style={styles.offlineModeText}>
+            保存済み本文と読書履歴を利用できるよ。通信が戻ったらアプリを開き直してね。
+          </Text>
+        </View>
+      ) : null}
+
       <View style={styles.tabBar}>
         {TAB_ITEMS.map((tab) => {
           const isActive = tab.key === activeTab;
@@ -562,9 +606,22 @@ export default function HomeScreen() {
         })}
       </View>
 
-      <FlatList
-        contentContainerStyle={styles.listContent}
-        data={activeFeed.novels}
+      {activeTab === 'library' ? (
+        <LibraryView
+          onOpenNovel={(novelId, resume) => {
+            router.push({
+              pathname: '/novel/[id]',
+              params: {
+                id: String(novelId),
+                ...(resume ? { resume: '1' } : {}),
+              },
+            });
+          }}
+        />
+      ) : (
+        <FlatList
+          contentContainerStyle={styles.listContent}
+          data={activeFeed.novels}
         ItemSeparatorComponent={ListSeparator}
         keyboardShouldPersistTaps="handled"
         keyExtractor={(item) => String(item.id)}
@@ -651,7 +708,8 @@ export default function HomeScreen() {
             rank={activeTab === 'ranking' ? index + 1 : undefined}
           />
         )}
-      />
+        />
+      )}
 
       {selectedNovel && (
         <NovelDetailModal
@@ -681,7 +739,9 @@ export default function HomeScreen() {
           <Pressable onPress={() => {}} style={styles.settingsCard}>
             <Text style={styles.settingsTitle}>アカウント</Text>
             <Text style={styles.settingsDescription}>
-              Pixivへ接続済み · userId {userId}
+              {userId === null
+                ? 'オフラインモードで利用中'
+                : `Pixivへ接続済み · userId ${userId}`}
             </Text>
             <Text style={styles.settingsNote}>
               ログアウトすると、端末に保存した認証情報を削除するよ。
@@ -1195,6 +1255,25 @@ function createStyles(colors: AppColors) {
   settingsButtonText: {
     color: colors.textSecondary,
     fontSize: 21,
+  },
+  offlineModeBanner: {
+    gap: 3,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: colors.accentSoft,
+  },
+  offlineModeTitle: {
+    color: colors.accentStrong,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  offlineModeText: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    lineHeight: 15,
   },
   tabBar: {
     flexDirection: 'row',

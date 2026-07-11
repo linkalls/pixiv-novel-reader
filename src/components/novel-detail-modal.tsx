@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  InteractionManager,
   Modal,
   Pressable,
   ScrollView,
@@ -76,40 +77,44 @@ export function NovelDetailModal({
       return;
     }
 
+    const previousDetail = detail;
+    const shouldBookmark = !detail.isBookmarked;
+    const changedNovel: PixivNovelItem = {
+      ...detail,
+      isBookmarked: shouldBookmark,
+      totalBookmarks: Math.max(
+        0,
+        detail.totalBookmarks + (shouldBookmark ? 1 : -1),
+      ),
+    };
+
     setIsBookmarkLoading(true);
     setErrorMessage(null);
+    setDetail(changedNovel);
+    onNovelChanged(changedNovel);
 
     try {
-      const shouldBookmark = !detail.isBookmarked;
       const refreshToken = await setNovelBookmark(detail.id, shouldBookmark);
-      const changedNovel: PixivNovelItem = {
-        ...detail,
-        isBookmarked: shouldBookmark,
-        totalBookmarks: Math.max(
-          0,
-          detail.totalBookmarks + (shouldBookmark ? 1 : -1),
-        ),
-      };
-
-      setDetail(changedNovel);
-      onNovelChanged(changedNovel);
       await onRefreshToken(refreshToken);
     } catch (error) {
-      setErrorMessage(toErrorMessage(error));
+      setDetail(previousDetail);
+      onNovelChanged(previousDetail);
+      setErrorMessage(`ブックマークを変更できなかった: ${toErrorMessage(error)}`);
     } finally {
       setIsBookmarkLoading(false);
     }
   }
 
   function openReaderFromBeginning() {
-    const novelId = String(detail.id);
-    onClose();
+    router.push({
+      pathname: '/novel/[id]',
+      params: { id: String(detail.id) },
+    });
 
-    requestAnimationFrame(() => {
-      router.push({
-        pathname: '/novel/[id]',
-        params: { id: novelId },
-      });
+    // 読書ページを背面へ積んでから詳細モーダルを閉じる。
+    // 先に閉じるとホームが一瞬見えるため、画面遷移完了後に閉じる。
+    InteractionManager.runAfterInteractions(() => {
+      onClose();
     });
   }
 

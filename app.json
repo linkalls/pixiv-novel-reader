@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pixiv Novel Reader",
     "slug": "pixiv-novel-reader",
-    "version": "1.4.1",
+    "version": "1.5.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "pixivnovelreader",
@@ -19,7 +19,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.pixivnovelreader",
-      "versionCode": 6
+      "versionCode": 7
     },
     "web": {
       "output": "static",
@@ -39,7 +39,8 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true,

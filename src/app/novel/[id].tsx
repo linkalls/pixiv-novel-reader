@@ -28,10 +28,20 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PixivNovelAjaxLoader } from '@/components/pixiv-novel-ajax-loader';
+import {
+  deleteOfflineNovel,
+  getOfflineNovel,
+  getReadingHistory,
+  recordNovelOpened,
+  saveOfflineNovel,
+  updateReadingProgress,
+} from '@/lib/library-db';
+import { emitNovelChanged } from '@/lib/novel-events';
 import { parseNovelBlocks, type NovelBlock } from '@/lib/novel-format';
 import {
   fetchNovelDetail,
   fetchNovelText,
+  fetchRecommendedNovels,
   fetchRelatedNovels,
   setNovelBookmark,
   type NovelReaderContent,
@@ -136,18 +146,28 @@ const LINE_HEIGHT_RATIOS: Record<ReaderLineSpacing, number> = {
 
 export default function NovelReaderScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    id?: string | string[];
+    resume?: string | string[];
+  }>();
   const { colors, isDark: isAppDark } = useAppTheme();
   const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const rawResume = Array.isArray(params.resume)
+    ? params.resume[0]
+    : params.resume;
   const novelId = Number(rawId);
   const isValidNovelId = Number.isInteger(novelId) && novelId > 0;
+  const shouldResume = rawResume === '1';
 
   const [detail, setDetail] = useState<PixivNovelItem | null>(null);
   const [readerContent, setReaderContent] =
     useState<NovelReaderContent | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(isValidNovelId);
   const [isTextLoading, setIsTextLoading] = useState(isValidNovelId);
-  const [isAjaxLoading, setIsAjaxLoading] = useState(isValidNovelId);
+  const [isAjaxLoading, setIsAjaxLoading] = useState(false);
+  const [isOfflineChecked, setIsOfflineChecked] = useState(!isValidNovelId);
+  const [isOfflineSaved, setIsOfflineSaved] = useState(false);
+  const [isOfflineLoading, setIsOfflineLoading] = useState(false);
   const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
   const [ajaxAttempt, setAjaxAttempt] = useState(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(
@@ -160,6 +180,11 @@ export default function NovelReaderScreen() {
   const [isRelatedLoading, setIsRelatedLoading] = useState(isValidNovelId);
   const [relatedError, setRelatedError] = useState<string | null>(null);
   const [relatedAttempt, setRelatedAttempt] = useState(1);
+  const [discoveryNovels, setDiscoveryNovels] = useState<PixivNovelItem[]>([]);
+  const [isDiscoveryLoading, setIsDiscoveryLoading] = useState(isValidNovelId);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveryAttempt, setDiscoveryAttempt] = useState(1);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>({
     theme: isAppDark ? 'black' : 'white',
     fontSize: 'normal',
@@ -167,6 +192,17 @@ export default function NovelReaderScreen() {
   });
   const fallbackStartedRef = useRef(false);
   const readerEndOffsetRef = useRef<number | null>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const currentProgressRef = useRef(0);
+  const currentScrollOffsetRef = useRef(0);
+  const progressSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const resumeOffsetRef = useRef<number | null>(null);
+  const hasRestoredPositionRef = useRef(false);
+  const hasOfflineContentRef = useRef(false);
+  const historyNovelIdRef = useRef<number | null>(null);
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const palette = READER_THEMES[settings.theme];
   const styles = useMemo(() => createStyles(palette), [palette]);
@@ -174,6 +210,12 @@ export default function NovelReaderScreen() {
     () => (readerContent ? parseNovelBlocks(readerContent.text) : []),
     [readerContent],
   );
+  const discoveryItems = useMemo(() => {
+    const relatedIds = new Set(relatedNovels.map((novel) => novel.id));
+    return discoveryNovels
+      .filter((novel) => novel.id !== novelId && !relatedIds.has(novel.id))
+      .slice(0, 12);
+  }, [discoveryNovels, novelId, relatedNovels]);
   const fontSize = FONT_SIZE_VALUES[settings.fontSize];
   const lineHeight = Math.round(
     fontSize * LINE_HEIGHT_RATIOS[settings.lineSpacing],
@@ -237,6 +279,62 @@ export default function NovelReaderScreen() {
       };
     }
 
+    async function loadLocalReaderState() {
+      try {
+        const [offlineRecord, history] = await Promise.all([
+          getOfflineNovel(novelId),
+          shouldResume ? getReadingHistory(novelId) : Promise.resolve(null),
+        ]);
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (history && shouldResume && !history.isFinished) {
+          resumeOffsetRef.current = history.scrollOffset;
+          currentProgressRef.current = history.progress;
+          currentScrollOffsetRef.current = history.scrollOffset;
+          setScrollProgress(history.progress);
+        }
+
+        if (offlineRecord) {
+          hasOfflineContentRef.current = true;
+          setDetail(offlineRecord.detail);
+          setReaderContent(offlineRecord.content);
+          setIsOfflineSaved(true);
+          setIsDetailLoading(false);
+          setIsTextLoading(false);
+          setIsAjaxLoading(false);
+        } else {
+          setIsAjaxLoading(true);
+        }
+      } catch {
+        if (isMounted) {
+          setIsAjaxLoading(true);
+        }
+      } finally {
+        if (isMounted) {
+          setIsOfflineChecked(true);
+        }
+      }
+    }
+
+    void loadLocalReaderState();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isValidNovelId, novelId, shouldResume]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!isValidNovelId || !isOfflineChecked) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
     async function loadDetail() {
       try {
         const nextDetail = await fetchNovelDetail(novelId);
@@ -245,7 +343,7 @@ export default function NovelReaderScreen() {
           setDetail(nextDetail);
         }
       } catch (error) {
-        if (isMounted) {
+        if (isMounted && !hasOfflineContentRef.current) {
           setErrorMessage(toErrorMessage(error));
         }
       } finally {
@@ -260,12 +358,12 @@ export default function NovelReaderScreen() {
     return () => {
       isMounted = false;
     };
-  }, [isValidNovelId, novelId]);
+  }, [isOfflineChecked, isValidNovelId, novelId]);
 
   useEffect(() => {
     let isMounted = true;
 
-    if (!isValidNovelId) {
+    if (!isValidNovelId || !isOfflineChecked) {
       return () => {
         isMounted = false;
       };
@@ -310,7 +408,51 @@ export default function NovelReaderScreen() {
     return () => {
       isMounted = false;
     };
-  }, [isValidNovelId, novelId, relatedAttempt]);
+  }, [isOfflineChecked, isValidNovelId, novelId, relatedAttempt]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    if (!isValidNovelId || !isOfflineChecked) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    async function loadDiscovery() {
+      try {
+        const result = await fetchRecommendedNovels();
+
+        if (!isMounted) {
+          return;
+        }
+
+        await SecureStore.setItemAsync(
+          REFRESH_TOKEN_KEY,
+          result.refreshToken,
+        ).catch(() => {});
+
+        if (isMounted) {
+          setDiscoveryNovels(result.novels);
+          setDiscoveryError(null);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setDiscoveryError(toErrorMessage(error));
+        }
+      } finally {
+        if (isMounted) {
+          setIsDiscoveryLoading(false);
+        }
+      }
+    }
+
+    void loadDiscovery();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [discoveryAttempt, isOfflineChecked, isValidNovelId, novelId]);
 
   const handleAjaxSuccess = useCallback((content: NovelReaderContent) => {
     setReaderContent(content);
@@ -333,15 +475,78 @@ export default function NovelReaderScreen() {
         setReaderContent(content);
         setErrorMessage(null);
       } catch (fallbackError) {
-        setErrorMessage(
-          `${ajaxError.message}\n${toErrorMessage(fallbackError)}`,
-        );
+        const offlineRecord = await getOfflineNovel(novelId).catch(() => null);
+
+        if (offlineRecord) {
+          hasOfflineContentRef.current = true;
+          setDetail(offlineRecord.detail);
+          setReaderContent(offlineRecord.content);
+          setIsOfflineSaved(true);
+          setErrorMessage(null);
+          showStatus('通信できなかったため、保存済み本文を表示したよ');
+        } else {
+          setErrorMessage(
+            `${ajaxError.message}\n${toErrorMessage(fallbackError)}`,
+          );
+        }
       } finally {
         setIsTextLoading(false);
       }
     },
     [isValidNovelId, novelId],
   );
+
+  useEffect(() => {
+    if (!isOfflineSaved || !detail || !readerContent) {
+      return;
+    }
+
+    void saveOfflineNovel(detail, readerContent);
+  }, [detail, isOfflineSaved, readerContent]);
+
+  useEffect(() => {
+    if (!detail || !readerContent || historyNovelIdRef.current === detail.id) {
+      return;
+    }
+
+    historyNovelIdRef.current = detail.id;
+    void recordNovelOpened(
+      detail,
+      currentProgressRef.current,
+      currentScrollOffsetRef.current,
+    );
+  }, [detail, readerContent]);
+
+  useEffect(() => {
+    return () => {
+      if (progressSaveTimerRef.current) {
+        clearTimeout(progressSaveTimerRef.current);
+      }
+      if (statusTimerRef.current) {
+        clearTimeout(statusTimerRef.current);
+      }
+      if (isValidNovelId && historyNovelIdRef.current === novelId) {
+        void updateReadingProgress(
+          novelId,
+          currentProgressRef.current,
+          currentScrollOffsetRef.current,
+        );
+      }
+    };
+  }, [isValidNovelId, novelId]);
+
+  function showStatus(message: string) {
+    setStatusMessage(message);
+
+    if (statusTimerRef.current) {
+      clearTimeout(statusTimerRef.current);
+    }
+
+    statusTimerRef.current = setTimeout(() => {
+      setStatusMessage(null);
+      statusTimerRef.current = null;
+    }, 2_600);
+  }
 
   function updateSettings(nextSettings: ReaderSettings) {
     setSettings(nextSettings);
@@ -369,26 +574,81 @@ export default function NovelReaderScreen() {
       return;
     }
 
+    const previousDetail = detail;
+    const shouldBookmark = !detail.isBookmarked;
+    const optimisticDetail: PixivNovelItem = {
+      ...detail,
+      isBookmarked: shouldBookmark,
+      totalBookmarks: Math.max(
+        0,
+        detail.totalBookmarks + (shouldBookmark ? 1 : -1),
+      ),
+    };
+
     setIsBookmarkLoading(true);
     setErrorMessage(null);
+    setDetail(optimisticDetail);
+    emitNovelChanged(optimisticDetail);
 
     try {
-      const shouldBookmark = !detail.isBookmarked;
       const refreshToken = await setNovelBookmark(detail.id, shouldBookmark);
       await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
-      setDetail({
-        ...detail,
-        isBookmarked: shouldBookmark,
-        totalBookmarks: Math.max(
-          0,
-          detail.totalBookmarks + (shouldBookmark ? 1 : -1),
-        ),
-      });
+      showStatus(
+        shouldBookmark
+          ? 'ブックマークに追加したよ'
+          : 'ブックマークを解除したよ',
+      );
     } catch (error) {
-      setErrorMessage(toErrorMessage(error));
+      setDetail(previousDetail);
+      emitNovelChanged(previousDetail);
+      showStatus(`ブックマークを変更できなかった: ${toErrorMessage(error)}`);
     } finally {
       setIsBookmarkLoading(false);
     }
+  }
+
+  async function toggleOfflineSave() {
+    if (!detail || !readerContent || isOfflineLoading) {
+      return;
+    }
+
+    setIsOfflineLoading(true);
+
+    try {
+      if (isOfflineSaved) {
+        await deleteOfflineNovel(detail.id);
+        setIsOfflineSaved(false);
+        hasOfflineContentRef.current = false;
+        showStatus('オフライン保存を削除したよ');
+      } else {
+        await saveOfflineNovel(detail, readerContent);
+        setIsOfflineSaved(true);
+        hasOfflineContentRef.current = true;
+        showStatus('本文をオフライン保存したよ');
+      }
+    } catch (error) {
+      showStatus(`オフライン保存を変更できなかった: ${toErrorMessage(error)}`);
+    } finally {
+      setIsOfflineLoading(false);
+    }
+  }
+
+  function scheduleProgressSave(progress: number, scrollOffset: number) {
+    currentProgressRef.current = progress;
+    currentScrollOffsetRef.current = scrollOffset;
+
+    if (progressSaveTimerRef.current || !isValidNovelId) {
+      return;
+    }
+
+    progressSaveTimerRef.current = setTimeout(() => {
+      progressSaveTimerRef.current = null;
+      void updateReadingProgress(
+        novelId,
+        currentProgressRef.current,
+        currentScrollOffsetRef.current,
+      );
+    }, 800);
   }
 
   function handleScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
@@ -400,21 +660,41 @@ export default function NovelReaderScreen() {
         ? fallbackMaximumOffset
         : readerEndOffset - layoutMeasurement.height + 76;
 
-    setScrollProgress(
+    const nextProgress =
       readingMaximumOffset <= 0
         ? 1
         : Math.max(
             0,
             Math.min(1, contentOffset.y / readingMaximumOffset),
-          ),
-    );
+          );
+
+    setScrollProgress(nextProgress);
+    scheduleProgressSave(nextProgress, contentOffset.y);
+  }
+
+  function restoreReadingPosition() {
+    if (
+      hasRestoredPositionRef.current ||
+      resumeOffsetRef.current === null ||
+      resumeOffsetRef.current <= 0
+    ) {
+      return;
+    }
+
+    hasRestoredPositionRef.current = true;
+    requestAnimationFrame(() => {
+      scrollViewRef.current?.scrollTo({
+        animated: false,
+        y: resumeOffsetRef.current ?? 0,
+      });
+    });
   }
 
   return (
     <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
       <StatusBar style={palette.isDark ? 'light' : 'dark'} />
 
-      {isAjaxLoading && isValidNovelId && (
+      {isOfflineChecked && isAjaxLoading && !readerContent && isValidNovelId && (
         <PixivNovelAjaxLoader
           key={`${novelId}-${ajaxAttempt}`}
           novelId={novelId}
@@ -489,7 +769,9 @@ export default function NovelReaderScreen() {
       ) : readerContent ? (
         <ScrollView
           contentContainerStyle={styles.readerContent}
+          onContentSizeChange={restoreReadingPosition}
           onScroll={handleScroll}
+          ref={scrollViewRef}
           scrollEventThrottle={80}
           showsVerticalScrollIndicator={false}
         >
@@ -542,9 +824,12 @@ export default function NovelReaderScreen() {
             <Text style={styles.readerEndText}>読了</Text>
           </View>
 
-          <RelatedNovelsSection
+          <RecommendationSection
+            emptyText="似ている作品は見つからなかったよ"
             error={relatedError}
+            eyebrow="FOR YOU"
             isLoading={isRelatedLoading}
+            loadingText="似ている作品を探してる…"
             novels={relatedNovels}
             onNovelPress={(relatedNovelId) => {
               router.push({
@@ -559,6 +844,30 @@ export default function NovelReaderScreen() {
             }}
             palette={palette}
             styles={styles}
+            title="こちらもおすすめ"
+          />
+
+          <RecommendationSection
+            emptyText="新しい作品との出会いは、また次回のお楽しみ。"
+            error={discoveryError}
+            eyebrow="DISCOVERY"
+            isLoading={isDiscoveryLoading}
+            loadingText="ディスカバリーを準備してる…"
+            novels={discoveryItems}
+            onNovelPress={(discoveryNovelId) => {
+              router.push({
+                pathname: '/novel/[id]',
+                params: { id: String(discoveryNovelId) },
+              });
+            }}
+            onRetry={() => {
+              setIsDiscoveryLoading(true);
+              setDiscoveryError(null);
+              setDiscoveryAttempt((current) => current + 1);
+            }}
+            palette={palette}
+            styles={styles}
+            title="ディスカバリー"
           />
         </ScrollView>
       ) : (
@@ -580,30 +889,6 @@ export default function NovelReaderScreen() {
         </View>
       )}
 
-      {readerContent ? (
-        <View style={styles.floatingControls}>
-          <View style={styles.progressPill}>
-            <Text style={styles.progressPercent}>
-              {Math.round(scrollProgress * 100)}%
-            </Text>
-          </View>
-          <Pressable
-            accessibilityLabel="表示設定を開く"
-            accessibilityRole="button"
-            onPress={() => {
-              setIsSettingsVisible(true);
-            }}
-            style={({ pressed }) => [
-              styles.displayButton,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text style={styles.displayButtonAa}>Aa</Text>
-            <Text style={styles.displayButtonLabel}>表示</Text>
-          </Pressable>
-        </View>
-      ) : null}
-
       <ReaderSettingsModal
         onChange={updateSettings}
         onClose={() => {
@@ -614,7 +899,17 @@ export default function NovelReaderScreen() {
         visible={isSettingsVisible}
       />
 
+      {statusMessage ? (
+        <View pointerEvents="none" style={styles.statusToast}>
+          <Text numberOfLines={3} style={styles.statusToastText}>
+            {statusMessage}
+          </Text>
+        </View>
+      ) : null}
+
       <MoreActionsModal
+        isOfflineLoading={isOfflineLoading}
+        isOfflineSaved={isOfflineSaved}
         onClose={() => {
           setIsMoreVisible(false);
         }}
@@ -624,6 +919,12 @@ export default function NovelReaderScreen() {
             `https://www.pixiv.net/novel/show.php?id=${novelId}`,
           );
         }}
+        onOpenSettings={() => {
+          setIsMoreVisible(false);
+          requestAnimationFrame(() => {
+            setIsSettingsVisible(true);
+          });
+        }}
         onReload={() => {
           setIsMoreVisible(false);
           retryReader();
@@ -632,38 +933,51 @@ export default function NovelReaderScreen() {
           setIsMoreVisible(false);
           router.back();
         }}
+        onToggleOffline={() => {
+          setIsMoreVisible(false);
+          void toggleOfflineSave();
+        }}
         palette={palette}
+        progress={scrollProgress}
         visible={isMoreVisible}
       />
     </SafeAreaView>
   );
 }
 
-interface RelatedNovelsSectionProps {
+interface RecommendationSectionProps {
+  emptyText: string;
   error: string | null;
+  eyebrow: string;
   isLoading: boolean;
+  loadingText: string;
   novels: PixivNovelItem[];
   onNovelPress: (novelId: number) => void;
   onRetry: () => void;
   palette: ReaderPalette;
   styles: ReturnType<typeof createStyles>;
+  title: string;
 }
 
-function RelatedNovelsSection({
+function RecommendationSection({
+  emptyText,
   error,
+  eyebrow,
   isLoading,
+  loadingText,
   novels,
   onNovelPress,
   onRetry,
   palette,
   styles,
-}: RelatedNovelsSectionProps) {
+  title,
+}: RecommendationSectionProps) {
   return (
     <View style={styles.relatedSection}>
       <View style={styles.relatedHeadingRow}>
         <View style={styles.relatedHeadingText}>
-          <Text style={styles.relatedEyebrow}>NEXT READ</Text>
-          <Text style={styles.relatedTitle}>次に読む</Text>
+          <Text style={styles.relatedEyebrow}>{eyebrow}</Text>
+          <Text style={styles.relatedTitle}>{title}</Text>
         </View>
         {!isLoading && novels.length > 0 ? (
           <Text style={styles.relatedCount}>{novels.length}作品</Text>
@@ -673,7 +987,7 @@ function RelatedNovelsSection({
       {isLoading ? (
         <View style={styles.relatedLoading}>
           <ActivityIndicator color={palette.accent} />
-          <Text style={styles.relatedMuted}>関連作品を探してる…</Text>
+          <Text style={styles.relatedMuted}>{loadingText}</Text>
         </View>
       ) : error ? (
         <View style={styles.relatedErrorCard}>
@@ -692,7 +1006,7 @@ function RelatedNovelsSection({
           </Pressable>
         </View>
       ) : novels.length === 0 ? (
-        <Text style={styles.relatedMuted}>関連作品は見つからなかったよ</Text>
+        <Text style={styles.relatedMuted}>{emptyText}</Text>
       ) : (
         <ScrollView
           contentContainerStyle={styles.relatedList}
@@ -777,7 +1091,9 @@ function ToolbarSymbolButton({
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
+      accessibilityState={{ busy: disabled, disabled }}
       disabled={disabled}
+      hitSlop={10}
       onPress={onPress}
       style={({ pressed }) => [
         toolbarStyles.button,
@@ -1044,20 +1360,30 @@ function RadioOption({ active, label, onPress, palette }: RadioOptionProps) {
 }
 
 interface MoreActionsModalProps {
+  isOfflineLoading: boolean;
+  isOfflineSaved: boolean;
   onClose: () => void;
   onOpenPixiv: () => void;
+  onOpenSettings: () => void;
   onReload: () => void;
   onReturn: () => void;
+  onToggleOffline: () => void;
   palette: ReaderPalette;
+  progress: number;
   visible: boolean;
 }
 
 function MoreActionsModal({
+  isOfflineLoading,
+  isOfflineSaved,
   onClose,
   onOpenPixiv,
+  onOpenSettings,
   onReload,
   onReturn,
+  onToggleOffline,
   palette,
+  progress,
   visible,
 }: MoreActionsModalProps) {
   const styles = useMemo(() => createSheetStyles(palette), [palette]);
@@ -1072,10 +1398,42 @@ function MoreActionsModal({
       <Pressable onPress={onClose} style={styles.backdrop}>
         <Pressable onPress={() => {}} style={styles.actionSheet}>
           <View style={styles.sheetHandle} />
-          <Text style={styles.sheetTitle}>その他</Text>
-          <SheetAction label="Pixivで作品を開く" onPress={onOpenPixiv} palette={palette} />
-          <SheetAction label="本文を再読み込み" onPress={onReload} palette={palette} />
-          <SheetAction label="読書画面を閉じる" onPress={onReturn} palette={palette} />
+          <View style={styles.actionSheetHeader}>
+            <Text style={styles.sheetTitle}>読書メニュー</Text>
+            <Text style={styles.actionSheetProgress}>
+              読書位置 {Math.round(progress * 100)}%
+            </Text>
+          </View>
+          <SheetAction
+            label="Aa  表示設定"
+            onPress={onOpenSettings}
+            palette={palette}
+          />
+          <SheetAction
+            disabled={isOfflineLoading}
+            label={
+              isOfflineSaved
+                ? 'オフライン保存を削除'
+                : '本文をオフライン保存'
+            }
+            onPress={onToggleOffline}
+            palette={palette}
+          />
+          <SheetAction
+            label="Pixivで作品を開く"
+            onPress={onOpenPixiv}
+            palette={palette}
+          />
+          <SheetAction
+            label="本文を再読み込み"
+            onPress={onReload}
+            palette={palette}
+          />
+          <SheetAction
+            label="読書画面を閉じる"
+            onPress={onReturn}
+            palette={palette}
+          />
         </Pressable>
       </Pressable>
     </Modal>
@@ -1083,10 +1441,12 @@ function MoreActionsModal({
 }
 
 function SheetAction({
+  disabled = false,
   label,
   onPress,
   palette,
 }: {
+  disabled?: boolean;
   label: string;
   onPress: () => void;
   palette: ReaderPalette;
@@ -1094,11 +1454,13 @@ function SheetAction({
   return (
     <Pressable
       accessibilityRole="button"
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         actionStyles.button,
         { borderBottomColor: palette.border },
         pressed && actionStyles.pressed,
+        disabled && actionStyles.disabled,
       ]}
     >
       <Text style={[actionStyles.text, { color: palette.text }]}>{label}</Text>
@@ -1452,59 +1814,30 @@ function createStyles(palette: ReaderPalette) {
       fontSize: 21,
       lineHeight: 20,
     },
-    floatingControls: {
+    statusToast: {
       position: 'absolute',
-      right: 16,
-      bottom: 20,
-      flexDirection: 'row',
+      left: 18,
+      right: 18,
+      bottom: 24,
       alignItems: 'center',
-      gap: 8,
-    },
-    progressPill: {
-      minWidth: 55,
-      minHeight: 42,
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingHorizontal: 13,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: palette.border,
-      borderRadius: 22,
+      borderRadius: 16,
       backgroundColor: palette.toolbar,
       shadowColor: '#000000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: palette.isDark ? 0.32 : 0.14,
-      shadowRadius: 12,
-      elevation: 5,
+      shadowOffset: { width: 0, height: 5 },
+      shadowOpacity: palette.isDark ? 0.4 : 0.18,
+      shadowRadius: 14,
+      elevation: 7,
     },
-    progressPercent: {
-      color: palette.muted,
-      fontSize: 11,
-      fontWeight: '800',
-      fontVariant: ['tabular-nums'],
-    },
-    displayButton: {
-      minHeight: 48,
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 7,
-      paddingHorizontal: 16,
-      borderRadius: 24,
-      backgroundColor: palette.accent,
-      shadowColor: '#000000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: palette.isDark ? 0.34 : 0.2,
-      shadowRadius: 13,
-      elevation: 6,
-    },
-    displayButtonAa: {
-      color: '#FFFFFF',
-      fontSize: 18,
-      fontWeight: '700',
-    },
-    displayButtonLabel: {
-      color: '#FFFFFF',
+    statusToastText: {
+      color: palette.text,
       fontSize: 12,
-      fontWeight: '800',
+      fontWeight: '700',
+      lineHeight: 18,
+      textAlign: 'center',
     },
     pressed: {
       opacity: 0.62,
@@ -1560,6 +1893,15 @@ function createSheetStyles(palette: ReaderPalette) {
       flex: 1,
       color: palette.text,
       fontSize: 20,
+      fontWeight: '700',
+    },
+    actionSheetHeader: {
+      gap: 4,
+      paddingVertical: 8,
+    },
+    actionSheetProgress: {
+      color: palette.muted,
+      fontSize: 12,
       fontWeight: '700',
     },
     closeButton: {
@@ -1653,6 +1995,9 @@ const radioStyles = StyleSheet.create({
   pressed: {
     opacity: 0.62,
   },
+  disabled: {
+    opacity: 0.45,
+  },
 });
 
 const actionStyles = StyleSheet.create({
@@ -1667,5 +2012,8 @@ const actionStyles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.62,
+  },
+  disabled: {
+    opacity: 0.45,
   },
 });
