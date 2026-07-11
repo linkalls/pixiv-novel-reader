@@ -256,11 +256,7 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
 
   return (
     <View style={styles.container}>
-      <ScrollView
-        contentContainerStyle={styles.modeTabs}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-      >
+      <View style={styles.modeTabs}>
         <LibraryModeButton
           active={mode === 'history'}
           label="履歴"
@@ -286,7 +282,7 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
           label="統計"
           onPress={() => setMode('stats')}
         />
-      </ScrollView>
+      </View>
 
       {mode === 'history' ? (
         <HistoryControls
@@ -584,11 +580,7 @@ function HistoryControls({
 
       <View style={styles.historyOptionSection}>
         <Text style={styles.historySectionLabel}>表示する履歴</Text>
-        <ScrollView
-          contentContainerStyle={styles.filterRow}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-        >
+        <View style={styles.filterRow}>
           {HISTORY_FILTERS.map((option) => (
             <FilterChip
               active={filter === option.value}
@@ -597,16 +589,12 @@ function HistoryControls({
               onPress={() => onFilterChange(option.value)}
             />
           ))}
-        </ScrollView>
+        </View>
       </View>
 
       <View style={styles.historyOptionSection}>
         <Text style={styles.historySectionLabel}>並び順</Text>
-        <ScrollView
-          contentContainerStyle={styles.filterRow}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-        >
+        <View style={styles.filterRow}>
           {HISTORY_SORTS.map((option) => (
             <FilterChip
               active={sort === option.value}
@@ -615,7 +603,7 @@ function HistoryControls({
               onPress={() => onSortChange(option.value)}
             />
           ))}
-        </ScrollView>
+        </View>
       </View>
     </View>
   );
@@ -868,17 +856,21 @@ function createStyles(colors: AppColors) {
   return StyleSheet.create({
     container: { flex: 1 },
     modeTabs: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
       gap: 10,
       paddingHorizontal: 16,
-      paddingTop: 18,
-      paddingBottom: 18,
+      paddingTop: 16,
+      paddingBottom: 16,
     },
     modeButton: {
-      minWidth: 92,
-      minHeight: 46,
+      flexGrow: 1,
+      flexBasis: '30%',
+      minWidth: 0,
+      minHeight: 48,
       alignItems: 'center',
       justifyContent: 'center',
-      paddingHorizontal: 18,
+      paddingHorizontal: 12,
       borderRadius: 15,
       backgroundColor: colors.surfaceAlt,
     },
@@ -886,56 +878,67 @@ function createStyles(colors: AppColors) {
     modeText: { color: colors.textMuted, fontSize: 13, fontWeight: '800' },
     modeTextActive: { color: colors.onAccent },
     historyControls: {
-      gap: 19,
-      paddingHorizontal: 16,
-      paddingTop: 2,
-      paddingBottom: 14,
+      gap: 22,
+      marginHorizontal: 16,
+      marginBottom: 2,
+      padding: 16,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 20,
+      backgroundColor: colors.surface,
     },
-    historySearchSection: { gap: 10 },
+    historySearchSection: { gap: 12 },
     historySectionHeader: {
-      minHeight: 40,
+      minHeight: 42,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: 16,
     },
-    historyHeadingText: { flex: 1, gap: 2 },
+    historyHeadingText: { flex: 1, gap: 3 },
     historySectionLabel: {
       color: colors.text,
-      fontSize: 12,
+      fontSize: 13,
       fontWeight: '900',
       letterSpacing: 0.2,
     },
-    historySectionHint: { color: colors.textMuted, fontSize: 10 },
-    historyOptionSection: { gap: 10 },
+    historySectionHint: { color: colors.textMuted, fontSize: 11 },
+    historyOptionSection: { gap: 11 },
     searchInput: {
       width: '100%',
-      minHeight: 50,
+      minHeight: 54,
       paddingHorizontal: 16,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
-      borderRadius: 15,
+      borderRadius: 16,
       color: colors.text,
       backgroundColor: colors.input,
       fontSize: 14,
     },
     clearButton: {
-      minHeight: 36,
+      minHeight: 38,
       justifyContent: 'center',
-      paddingHorizontal: 12,
-      borderRadius: 10,
+      paddingHorizontal: 13,
+      borderRadius: 11,
       backgroundColor: colors.dangerSoft,
     },
     clearButtonText: { color: colors.danger, fontSize: 10, fontWeight: '900' },
-    filterRow: { gap: 9, paddingRight: 16 },
+    filterRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 10,
+    },
     filterChip: {
-      minHeight: 38,
+      flexGrow: 1,
+      minWidth: 72,
+      minHeight: 42,
+      alignItems: 'center',
       justifyContent: 'center',
       paddingHorizontal: 14,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
-      borderRadius: 19,
-      backgroundColor: colors.surface,
+      borderRadius: 21,
+      backgroundColor: colors.surfaceAlt,
     },
     filterChipActive: {
       borderColor: colors.accent,
@@ -955,24 +958,80 @@ function createStyles(colors: AppColors) {
     selectedShelfTitle: { flex: 1, color: colors.text, fontSize: 12, fontWeight: '800' },
     shelfActionText: { color: colors.accent, fontSize: 11, fontWeight: '800' },
     shelfDeleteText: { color: colors.danger, fontSize: 11, fontWeight: '800' },
-    listContent: { flexGrow: 1, gap: 14, paddingHorizontal: 16, paddingTop: 20, paddingBottom: 110 },
-    card: { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 18, backgroundColor: colors.surface },
-    cardMain: { flexDirection: 'row', gap: 13, padding: 12 },
-    cover: { width: 82, height: 110, borderRadius: 11, backgroundColor: colors.surfaceAlt },
+    listContent: {
+      flexGrow: 1,
+      gap: 16,
+      paddingHorizontal: 16,
+      paddingTop: 20,
+      paddingBottom: 110,
+    },
+    card: {
+      overflow: 'hidden',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 20,
+      backgroundColor: colors.surface,
+    },
+    cardMain: { flexDirection: 'row', gap: 15, padding: 15 },
+    cover: {
+      width: 92,
+      height: 128,
+      borderRadius: 13,
+      backgroundColor: colors.surfaceAlt,
+    },
     coverPlaceholder: { alignItems: 'center', justifyContent: 'center' },
-    coverPlaceholderText: { fontSize: 28 },
-    cardBody: { flex: 1, gap: 5 },
-    cardTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 },
-    cardTitle: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '800', lineHeight: 21 },
-    offlineBadge: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, backgroundColor: colors.accentSoft },
-    offlineBadgeText: { color: colors.accentStrong, fontSize: 8, fontWeight: '900', letterSpacing: 0.5 },
+    coverPlaceholderText: { fontSize: 30 },
+    cardBody: { flex: 1, gap: 7 },
+    cardTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+    cardTitle: {
+      flex: 1,
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: '800',
+      lineHeight: 23,
+    },
+    offlineBadge: {
+      paddingHorizontal: 7,
+      paddingVertical: 4,
+      borderRadius: 7,
+      backgroundColor: colors.accentSoft,
+    },
+    offlineBadgeText: {
+      color: colors.accentStrong,
+      fontSize: 8,
+      fontWeight: '900',
+      letterSpacing: 0.5,
+    },
     author: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
-    meta: { color: colors.textMuted, fontSize: 10 },
-    progressRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 3 },
-    progressTrack: { flex: 1, height: 5, overflow: 'hidden', borderRadius: 999, backgroundColor: colors.surfaceAlt },
+    meta: { color: colors.textMuted, fontSize: 10, lineHeight: 16 },
+    progressRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      marginTop: 4,
+    },
+    progressTrack: {
+      flex: 1,
+      height: 6,
+      overflow: 'hidden',
+      borderRadius: 999,
+      backgroundColor: colors.surfaceAlt,
+    },
     progressValue: { height: '100%', borderRadius: 999, backgroundColor: colors.accent },
-    progressText: { minWidth: 34, color: colors.textMuted, fontSize: 10, fontWeight: '800', textAlign: 'right' },
-    openLabel: { marginTop: 3, color: colors.accent, fontSize: 11, fontWeight: '800', textAlign: 'right' },
+    progressText: {
+      minWidth: 36,
+      color: colors.textMuted,
+      fontSize: 10,
+      fontWeight: '800',
+      textAlign: 'right',
+    },
+    openLabel: {
+      marginTop: 5,
+      color: colors.accent,
+      fontSize: 11,
+      fontWeight: '800',
+      textAlign: 'right',
+    },
     removeButton: { minHeight: 42, alignItems: 'center', justifyContent: 'center', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
     removeButtonText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
     markCard: { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 18, backgroundColor: colors.surface },

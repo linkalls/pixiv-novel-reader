@@ -204,6 +204,7 @@ function buildVerticalReaderHtml({
   #viewport {
     width: 100vw; height: 100vh;
     overflow-x: auto; overflow-y: hidden;
+    direction: rtl;
     scrollbar-width: none;
     overscroll-behavior: none;
     touch-action: pan-x;
@@ -212,6 +213,7 @@ function buildVerticalReaderHtml({
   #content {
     writing-mode: vertical-rl;
     text-orientation: mixed;
+    direction: ltr;
     height: 100vh;
     min-width: 100vw;
     padding: 28px 24px 30px;
@@ -313,12 +315,53 @@ function buildVerticalReaderHtml({
   var blocks = Array.prototype.slice.call(document.querySelectorAll('[data-block-index]'));
   var raf = 0;
   var lastBlock = -1;
+  var rtlScrollType = detectRtlScrollType();
 
+  // RTLスクロールのscrollLeftはWebViewエンジンごとに次の3方式がある。
+  // どの方式でも「右端 = 0、左へ読むほど増える」論理座標へ変換する。
+  function detectRtlScrollType() {
+    var outer = document.createElement('div');
+    var inner = document.createElement('div');
+    outer.dir = 'rtl';
+    outer.style.position = 'absolute';
+    outer.style.left = '-10000px';
+    outer.style.width = '4px';
+    outer.style.height = '1px';
+    outer.style.overflow = 'scroll';
+    inner.style.width = '8px';
+    inner.style.height = '1px';
+    outer.appendChild(inner);
+    document.body.appendChild(outer);
+
+    var type = 'reverse';
+    if (outer.scrollLeft > 0) {
+      type = 'default';
+    } else {
+      outer.scrollLeft = 1;
+      if (outer.scrollLeft === 0) type = 'negative';
+    }
+
+    document.body.removeChild(outer);
+    return type;
+  }
   function maximumOffset() {
     return Math.max(0, viewport.scrollWidth - viewport.clientWidth);
   }
   function offsetValue() {
-    return Math.min(maximumOffset(), Math.abs(viewport.scrollLeft));
+    var maximum = maximumOffset();
+    var raw = viewport.scrollLeft;
+    var logical;
+    if (rtlScrollType === 'default') logical = maximum - raw;
+    else if (rtlScrollType === 'negative') logical = -raw;
+    else logical = raw;
+    return Math.max(0, Math.min(maximum, logical));
+  }
+  function physicalOffset(logicalOffset) {
+    var maximum = maximumOffset();
+    var target = Math.max(0, Math.min(maximum, logicalOffset));
+    if (rtlScrollType === 'default') return maximum - target;
+    if (rtlScrollType === 'negative') return -target;
+    return target;
   }
   function postProgress() {
     var maximum = maximumOffset();
@@ -354,25 +397,21 @@ function buildVerticalReaderHtml({
   function setLogicalOffset(offset, animated) {
     var maximum = maximumOffset();
     var target = Math.max(0, Math.min(maximum, offset));
-    var behavior = animated ? 'smooth' : 'auto';
-    viewport.scrollTo({ left: -target, behavior: behavior });
-    setTimeout(function () {
-      if (target > 2 && Math.abs(viewport.scrollLeft) < 2) {
-        viewport.scrollTo({ left: target, behavior: behavior });
-      }
-      schedulePost();
-    }, animated ? 220 : 20);
+    viewport.scrollTo({
+      left: physicalOffset(target),
+      behavior: animated ? 'smooth' : 'auto'
+    });
+    setTimeout(schedulePost, animated ? 220 : 20);
   }
 
   window.__PNR = {
     jumpToBlock: function (index, animated) {
       var element = document.querySelector('[data-block-index="' + index + '"]');
       if (!element) return;
-      element.scrollIntoView({
-        behavior: animated ? 'smooth' : 'auto',
-        block: 'nearest', inline: 'start'
-      });
-      setTimeout(schedulePost, animated ? 240 : 30);
+      var rect = element.getBoundingClientRect();
+      var readingEdge = viewport.clientWidth - 24;
+      var target = offsetValue() + (readingEdge - rect.right);
+      setLogicalOffset(target, animated);
     },
     jumpToProgress: function (progress, animated) {
       setLogicalOffset(maximumOffset() * Math.max(0, Math.min(1, progress)), animated);
