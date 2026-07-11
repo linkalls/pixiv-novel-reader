@@ -1,7 +1,7 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   InteractionManager,
@@ -14,6 +14,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import {
+  resolveBookmarkState,
+  type BookmarkState,
+  type BookmarkStateSource,
+} from '@/lib/bookmark-state';
 import {
   fetchNovelDetail,
   setNovelBookmark,
@@ -39,7 +44,28 @@ export function NovelDetailModal({
   const [detail, setDetail] = useState(novel);
   const [isDetailLoading, setIsDetailLoading] = useState(true);
   const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
+  const [bookmarkState, setBookmarkState] = useState<BookmarkState>({
+    value: novel.isBookmarked,
+    source: 'route',
+  });
+  const bookmarkStateRef = useRef<BookmarkState>({
+    value: novel.isBookmarked,
+    source: 'route',
+  });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const applyBookmarkState = useCallback(
+    (value: boolean, source: BookmarkStateSource): BookmarkState => {
+      const resolvedState = resolveBookmarkState(bookmarkStateRef.current, {
+        value,
+        source,
+      });
+      bookmarkStateRef.current = resolvedState;
+      setBookmarkState(resolvedState);
+      return resolvedState;
+    },
+    [],
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -49,8 +75,17 @@ export function NovelDetailModal({
         const nextDetail = await fetchNovelDetail(novel.id);
 
         if (isMounted) {
-          setDetail(nextDetail);
-          onNovelChanged(nextDetail);
+          const resolvedBookmark = applyBookmarkState(
+            nextDetail.isBookmarked,
+            'remote',
+          );
+          const resolvedDetail: PixivNovelItem = {
+            ...nextDetail,
+            isBookmarked:
+              resolvedBookmark.value ?? nextDetail.isBookmarked,
+          };
+          setDetail(resolvedDetail);
+          onNovelChanged(resolvedDetail);
         }
       } catch (error) {
         if (isMounted) {
@@ -68,7 +103,7 @@ export function NovelDetailModal({
     return () => {
       isMounted = false;
     };
-  }, [novel.id, onNovelChanged]);
+  }, [applyBookmarkState, novel.id, onNovelChanged]);
 
   const caption = useMemo(() => stripHtml(detail.caption), [detail.caption]);
 
@@ -78,7 +113,8 @@ export function NovelDetailModal({
     }
 
     const previousDetail = detail;
-    const shouldBookmark = !detail.isBookmarked;
+    const previousBookmarkState = bookmarkState.value ?? detail.isBookmarked;
+    const shouldBookmark = !previousBookmarkState;
     const changedNovel: PixivNovelItem = {
       ...detail,
       isBookmarked: shouldBookmark,
@@ -90,6 +126,7 @@ export function NovelDetailModal({
 
     setIsBookmarkLoading(true);
     setErrorMessage(null);
+    applyBookmarkState(shouldBookmark, 'user');
     setDetail(changedNovel);
     onNovelChanged(changedNovel);
 
@@ -97,6 +134,7 @@ export function NovelDetailModal({
       const refreshToken = await setNovelBookmark(detail.id, shouldBookmark);
       await onRefreshToken(refreshToken);
     } catch (error) {
+      applyBookmarkState(previousBookmarkState, 'user');
       setDetail(previousDetail);
       onNovelChanged(previousDetail);
       setErrorMessage(`ブックマークを変更できなかった: ${toErrorMessage(error)}`);
@@ -108,7 +146,10 @@ export function NovelDetailModal({
   function openReaderFromBeginning() {
     router.push({
       pathname: '/novel/[id]',
-      params: { id: String(detail.id) },
+      params: {
+        bookmarked: bookmarkState.value ? '1' : '0',
+        id: String(detail.id),
+      },
     });
 
     // 読書ページを背面へ積んでから詳細モーダルを閉じる。
@@ -192,23 +233,23 @@ export function NovelDetailModal({
             }}
             style={({ pressed }) => [
               styles.bookmarkButton,
-              detail.isBookmarked && styles.bookmarkButtonActive,
+              bookmarkState.value && styles.bookmarkButtonActive,
               pressed && styles.pressed,
               isBookmarkLoading && styles.disabled,
             ]}
           >
             {isBookmarkLoading ? (
               <ActivityIndicator
-                color={detail.isBookmarked ? colors.onAccent : colors.accent}
+                color={bookmarkState.value ? colors.onAccent : colors.accent}
               />
             ) : (
               <Text
                 style={[
                   styles.bookmarkButtonText,
-                  detail.isBookmarked && styles.bookmarkButtonTextActive,
+                  bookmarkState.value && styles.bookmarkButtonTextActive,
                 ]}
               >
-                {detail.isBookmarked
+                {bookmarkState.value
                   ? '★ ブックマーク済み'
                   : '☆ ブックマーク'}
               </Text>

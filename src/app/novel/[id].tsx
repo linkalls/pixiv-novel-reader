@@ -29,6 +29,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PixivNovelAjaxLoader } from '@/components/pixiv-novel-ajax-loader';
 import {
+  parseBookmarkRouteParam,
+  resolveBookmarkState,
+  type BookmarkState,
+  type BookmarkStateSource,
+} from '@/lib/bookmark-state';
+import {
   deleteOfflineNovel,
   getOfflineNovel,
   getReadingHistory,
@@ -147,6 +153,7 @@ const LINE_HEIGHT_RATIOS: Record<ReaderLineSpacing, number> = {
 export default function NovelReaderScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
+    bookmarked?: string | string[];
     id?: string | string[];
     resume?: string | string[];
   }>();
@@ -158,6 +165,7 @@ export default function NovelReaderScreen() {
   const novelId = Number(rawId);
   const isValidNovelId = Number.isInteger(novelId) && novelId > 0;
   const shouldResume = rawResume === '1';
+  const routeBookmarkState = parseBookmarkRouteParam(params.bookmarked);
 
   const [detail, setDetail] = useState<PixivNovelItem | null>(null);
   const [readerContent, setReaderContent] =
@@ -169,6 +177,14 @@ export default function NovelReaderScreen() {
   const [isOfflineSaved, setIsOfflineSaved] = useState(false);
   const [isOfflineLoading, setIsOfflineLoading] = useState(false);
   const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
+  const [bookmarkState, setBookmarkState] = useState<BookmarkState>({
+    value: routeBookmarkState,
+    source: routeBookmarkState === null ? null : 'route',
+  });
+  const bookmarkStateRef = useRef<BookmarkState>({
+    value: routeBookmarkState,
+    source: routeBookmarkState === null ? null : 'route',
+  });
   const [ajaxAttempt, setAjaxAttempt] = useState(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(
     isValidNovelId ? null : '作品IDを読み取れなかったよ',
@@ -219,6 +235,19 @@ export default function NovelReaderScreen() {
   const fontSize = FONT_SIZE_VALUES[settings.fontSize];
   const lineHeight = Math.round(
     fontSize * LINE_HEIGHT_RATIOS[settings.lineSpacing],
+  );
+
+  const applyBookmarkState = useCallback(
+    (value: boolean, source: BookmarkStateSource): BookmarkState => {
+      const resolvedState = resolveBookmarkState(bookmarkStateRef.current, {
+        value,
+        source,
+      });
+      bookmarkStateRef.current = resolvedState;
+      setBookmarkState(resolvedState);
+      return resolvedState;
+    },
+    [],
   );
 
   useEffect(() => {
@@ -299,7 +328,15 @@ export default function NovelReaderScreen() {
 
         if (offlineRecord) {
           hasOfflineContentRef.current = true;
-          setDetail(offlineRecord.detail);
+          const resolvedBookmark = applyBookmarkState(
+            offlineRecord.detail.isBookmarked,
+            'offline',
+          );
+          setDetail({
+            ...offlineRecord.detail,
+            isBookmarked:
+              resolvedBookmark.value ?? offlineRecord.detail.isBookmarked,
+          });
           setReaderContent(offlineRecord.content);
           setIsOfflineSaved(true);
           setIsDetailLoading(false);
@@ -324,7 +361,7 @@ export default function NovelReaderScreen() {
     return () => {
       isMounted = false;
     };
-  }, [isValidNovelId, novelId, shouldResume]);
+  }, [applyBookmarkState, isValidNovelId, novelId, shouldResume]);
 
   useEffect(() => {
     let isMounted = true;
@@ -340,7 +377,17 @@ export default function NovelReaderScreen() {
         const nextDetail = await fetchNovelDetail(novelId);
 
         if (isMounted) {
-          setDetail(nextDetail);
+          const resolvedBookmark = applyBookmarkState(
+            nextDetail.isBookmarked,
+            'remote',
+          );
+          const resolvedDetail: PixivNovelItem = {
+            ...nextDetail,
+            isBookmarked:
+              resolvedBookmark.value ?? nextDetail.isBookmarked,
+          };
+          setDetail(resolvedDetail);
+          emitNovelChanged(resolvedDetail);
         }
       } catch (error) {
         if (isMounted && !hasOfflineContentRef.current) {
@@ -358,7 +405,7 @@ export default function NovelReaderScreen() {
     return () => {
       isMounted = false;
     };
-  }, [isOfflineChecked, isValidNovelId, novelId]);
+  }, [applyBookmarkState, isOfflineChecked, isValidNovelId, novelId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -479,7 +526,15 @@ export default function NovelReaderScreen() {
 
         if (offlineRecord) {
           hasOfflineContentRef.current = true;
-          setDetail(offlineRecord.detail);
+          const resolvedBookmark = applyBookmarkState(
+            offlineRecord.detail.isBookmarked,
+            'offline',
+          );
+          setDetail({
+            ...offlineRecord.detail,
+            isBookmarked:
+              resolvedBookmark.value ?? offlineRecord.detail.isBookmarked,
+          });
           setReaderContent(offlineRecord.content);
           setIsOfflineSaved(true);
           setErrorMessage(null);
@@ -493,7 +548,7 @@ export default function NovelReaderScreen() {
         setIsTextLoading(false);
       }
     },
-    [isValidNovelId, novelId],
+    [applyBookmarkState, isValidNovelId, novelId],
   );
 
   useEffect(() => {
@@ -501,8 +556,14 @@ export default function NovelReaderScreen() {
       return;
     }
 
-    void saveOfflineNovel(detail, readerContent);
-  }, [detail, isOfflineSaved, readerContent]);
+    void saveOfflineNovel(
+      {
+        ...detail,
+        isBookmarked: bookmarkState.value ?? detail.isBookmarked,
+      },
+      readerContent,
+    );
+  }, [bookmarkState.value, detail, isOfflineSaved, readerContent]);
 
   useEffect(() => {
     if (!detail || !readerContent || historyNovelIdRef.current === detail.id) {
@@ -570,28 +631,35 @@ export default function NovelReaderScreen() {
   }
 
   async function toggleBookmark() {
-    if (!detail || isBookmarkLoading) {
+    if (bookmarkState.value === null || isBookmarkLoading) {
       return;
     }
 
+    const previousBookmarkState = bookmarkState.value;
     const previousDetail = detail;
-    const shouldBookmark = !detail.isBookmarked;
-    const optimisticDetail: PixivNovelItem = {
-      ...detail,
-      isBookmarked: shouldBookmark,
-      totalBookmarks: Math.max(
-        0,
-        detail.totalBookmarks + (shouldBookmark ? 1 : -1),
-      ),
-    };
+    const shouldBookmark = !bookmarkState.value;
+    const optimisticDetail = detail
+      ? {
+          ...detail,
+          isBookmarked: shouldBookmark,
+          totalBookmarks: Math.max(
+            0,
+            detail.totalBookmarks + (shouldBookmark ? 1 : -1),
+          ),
+        }
+      : null;
 
     setIsBookmarkLoading(true);
     setErrorMessage(null);
-    setDetail(optimisticDetail);
-    emitNovelChanged(optimisticDetail);
+    applyBookmarkState(shouldBookmark, 'user');
+
+    if (optimisticDetail) {
+      setDetail(optimisticDetail);
+      emitNovelChanged(optimisticDetail);
+    }
 
     try {
-      const refreshToken = await setNovelBookmark(detail.id, shouldBookmark);
+      const refreshToken = await setNovelBookmark(novelId, shouldBookmark);
       await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
       showStatus(
         shouldBookmark
@@ -599,8 +667,13 @@ export default function NovelReaderScreen() {
           : 'ブックマークを解除したよ',
       );
     } catch (error) {
+      applyBookmarkState(previousBookmarkState, 'user');
       setDetail(previousDetail);
-      emitNovelChanged(previousDetail);
+
+      if (previousDetail) {
+        emitNovelChanged(previousDetail);
+      }
+
       showStatus(`ブックマークを変更できなかった: ${toErrorMessage(error)}`);
     } finally {
       setIsBookmarkLoading(false);
@@ -621,7 +694,13 @@ export default function NovelReaderScreen() {
         hasOfflineContentRef.current = false;
         showStatus('オフライン保存を削除したよ');
       } else {
-        await saveOfflineNovel(detail, readerContent);
+        await saveOfflineNovel(
+          {
+            ...detail,
+            isBookmarked: bookmarkState.value ?? detail.isBookmarked,
+          },
+          readerContent,
+        );
         setIsOfflineSaved(true);
         hasOfflineContentRef.current = true;
         showStatus('本文をオフライン保存したよ');
@@ -726,13 +805,13 @@ export default function NovelReaderScreen() {
         <View style={[styles.toolbarSide, styles.toolbarSideRight]}>
           <ToolbarSymbolButton
             accessibilityLabel={
-              detail?.isBookmarked
+              bookmarkState.value
                 ? 'ブックマークを解除する'
                 : 'ブックマークする'
             }
-            androidName={detail?.isBookmarked ? 'bookmark' : 'bookmark_border'}
-            disabled={!detail || isBookmarkLoading}
-            iosName={detail?.isBookmarked ? 'bookmark.fill' : 'bookmark'}
+            androidName={bookmarkState.value ? 'bookmark' : 'bookmark_border'}
+            disabled={bookmarkState.value === null || isBookmarkLoading}
+            iosName={bookmarkState.value ? 'bookmark.fill' : 'bookmark'}
             onPress={() => {
               void toggleBookmark();
             }}
@@ -831,10 +910,13 @@ export default function NovelReaderScreen() {
             isLoading={isRelatedLoading}
             loadingText="似ている作品を探してる…"
             novels={relatedNovels}
-            onNovelPress={(relatedNovelId) => {
+            onNovelPress={(relatedNovel) => {
               router.push({
                 pathname: '/novel/[id]',
-                params: { id: String(relatedNovelId) },
+                params: {
+                  bookmarked: relatedNovel.isBookmarked ? '1' : '0',
+                  id: String(relatedNovel.id),
+                },
               });
             }}
             onRetry={() => {
@@ -854,10 +936,13 @@ export default function NovelReaderScreen() {
             isLoading={isDiscoveryLoading}
             loadingText="ディスカバリーを準備してる…"
             novels={discoveryItems}
-            onNovelPress={(discoveryNovelId) => {
+            onNovelPress={(discoveryNovel) => {
               router.push({
                 pathname: '/novel/[id]',
-                params: { id: String(discoveryNovelId) },
+                params: {
+                  bookmarked: discoveryNovel.isBookmarked ? '1' : '0',
+                  id: String(discoveryNovel.id),
+                },
               });
             }}
             onRetry={() => {
@@ -952,7 +1037,7 @@ interface RecommendationSectionProps {
   isLoading: boolean;
   loadingText: string;
   novels: PixivNovelItem[];
-  onNovelPress: (novelId: number) => void;
+  onNovelPress: (novel: PixivNovelItem) => void;
   onRetry: () => void;
   palette: ReaderPalette;
   styles: ReturnType<typeof createStyles>;
@@ -1020,7 +1105,7 @@ function RecommendationSection({
               accessibilityRole="button"
               key={novel.id}
               onPress={() => {
-                onNovelPress(novel.id);
+                onNovelPress(novel);
               }}
               style={({ pressed }) => [
                 styles.relatedCard,
