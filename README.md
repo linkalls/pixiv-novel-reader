@@ -107,11 +107,11 @@ Release APKは現在、配布・動作確認用としてAndroidのdebug keystore
 - Actions画面からの手動実行
 - `v*`タグのpush
 
-通常ビルドではAPKとSHA-256をActions Artifactへ30日間保存する。`v2.0.0`のようなタグをpushすると、同じ成果物をGitHub Releaseへ自動添付する。
+通常ビルドではAPKとSHA-256をActions Artifactへ30日間保存する。`v2.0.1`のようなタグをpushすると、同じ成果物をGitHub Releaseへ自動添付する。
 
 ```bash
-git tag v2.0.0
-git push origin v2.0.0
+git tag v2.0.1
+git push origin v2.0.1
 ```
 
 タグのバージョンと`app.json`の`expo.version`が一致しない場合、誤配布防止のためReleaseを失敗させる。

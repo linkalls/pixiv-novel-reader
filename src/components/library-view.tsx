@@ -550,51 +550,73 @@ function HistoryControls({
   const styles = useMemo(() => createStyles(colors), [colors]);
   return (
     <View style={styles.historyControls}>
-      <View style={styles.searchRow}>
+      <View style={styles.historySearchSection}>
+        <View style={styles.historySectionHeader}>
+          <View style={styles.historyHeadingText}>
+            <Text style={styles.historySectionLabel}>履歴を検索</Text>
+            <Text style={styles.historySectionHint}>作品名または作者名</Text>
+          </View>
+          {onClear ? (
+            <Pressable
+              accessibilityLabel="読書履歴をすべて削除"
+              accessibilityRole="button"
+              onPress={onClear}
+              style={({ pressed }) => [
+                styles.clearButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.clearButtonText}>履歴を削除</Text>
+            </Pressable>
+          ) : null}
+        </View>
         <TextInput
           autoCapitalize="none"
           autoCorrect={false}
           onChangeText={onQueryChange}
-          placeholder="作品名・作者名で履歴を検索"
+          placeholder="作品名・作者名を入力"
           placeholderTextColor={colors.placeholder}
           returnKeyType="search"
           style={styles.searchInput}
           value={query}
         />
-        {onClear ? (
-          <Pressable accessibilityRole="button" onPress={onClear}>
-            <Text style={styles.clearButtonText}>履歴削除</Text>
-          </Pressable>
-        ) : null}
       </View>
-      <ScrollView
-        contentContainerStyle={styles.filterRow}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-      >
-        {HISTORY_FILTERS.map((option) => (
-          <FilterChip
-            active={filter === option.value}
-            key={option.value}
-            label={option.label}
-            onPress={() => onFilterChange(option.value)}
-          />
-        ))}
-      </ScrollView>
-      <ScrollView
-        contentContainerStyle={styles.filterRow}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-      >
-        {HISTORY_SORTS.map((option) => (
-          <FilterChip
-            active={sort === option.value}
-            key={option.value}
-            label={option.label}
-            onPress={() => onSortChange(option.value)}
-          />
-        ))}
-      </ScrollView>
+
+      <View style={styles.historyOptionSection}>
+        <Text style={styles.historySectionLabel}>表示する履歴</Text>
+        <ScrollView
+          contentContainerStyle={styles.filterRow}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+        >
+          {HISTORY_FILTERS.map((option) => (
+            <FilterChip
+              active={filter === option.value}
+              key={option.value}
+              label={option.label}
+              onPress={() => onFilterChange(option.value)}
+            />
+          ))}
+        </ScrollView>
+      </View>
+
+      <View style={styles.historyOptionSection}>
+        <Text style={styles.historySectionLabel}>並び順</Text>
+        <ScrollView
+          contentContainerStyle={styles.filterRow}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+        >
+          {HISTORY_SORTS.map((option) => (
+            <FilterChip
+              active={sort === option.value}
+              key={option.value}
+              label={option.label}
+              onPress={() => onSortChange(option.value)}
+            />
+          ))}
+        </ScrollView>
+      </View>
     </View>
   );
 }
@@ -845,18 +867,80 @@ function toErrorMessage(error: unknown): string {
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
     container: { flex: 1 },
-    modeTabs: { gap: 8, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 9 },
-    modeButton: { minWidth: 82, minHeight: 40, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, borderRadius: 13, backgroundColor: colors.surfaceAlt },
+    modeTabs: {
+      gap: 10,
+      paddingHorizontal: 16,
+      paddingTop: 18,
+      paddingBottom: 18,
+    },
+    modeButton: {
+      minWidth: 92,
+      minHeight: 46,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 18,
+      borderRadius: 15,
+      backgroundColor: colors.surfaceAlt,
+    },
     modeButtonActive: { backgroundColor: colors.accent },
     modeText: { color: colors.textMuted, fontSize: 13, fontWeight: '800' },
     modeTextActive: { color: colors.onAccent },
-    historyControls: { gap: 8, paddingHorizontal: 16, paddingBottom: 8 },
-    searchRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    searchInput: { flex: 1, minHeight: 44, paddingHorizontal: 13, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 13, color: colors.text, backgroundColor: colors.input, fontSize: 13 },
-    clearButtonText: { color: colors.danger, fontSize: 11, fontWeight: '800' },
-    filterRow: { gap: 7 },
-    filterChip: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 17, backgroundColor: colors.surface },
-    filterChipActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+    historyControls: {
+      gap: 19,
+      paddingHorizontal: 16,
+      paddingTop: 2,
+      paddingBottom: 14,
+    },
+    historySearchSection: { gap: 10 },
+    historySectionHeader: {
+      minHeight: 40,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 16,
+    },
+    historyHeadingText: { flex: 1, gap: 2 },
+    historySectionLabel: {
+      color: colors.text,
+      fontSize: 12,
+      fontWeight: '900',
+      letterSpacing: 0.2,
+    },
+    historySectionHint: { color: colors.textMuted, fontSize: 10 },
+    historyOptionSection: { gap: 10 },
+    searchInput: {
+      width: '100%',
+      minHeight: 50,
+      paddingHorizontal: 16,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 15,
+      color: colors.text,
+      backgroundColor: colors.input,
+      fontSize: 14,
+    },
+    clearButton: {
+      minHeight: 36,
+      justifyContent: 'center',
+      paddingHorizontal: 12,
+      borderRadius: 10,
+      backgroundColor: colors.dangerSoft,
+    },
+    clearButtonText: { color: colors.danger, fontSize: 10, fontWeight: '900' },
+    filterRow: { gap: 9, paddingRight: 16 },
+    filterChip: {
+      minHeight: 38,
+      justifyContent: 'center',
+      paddingHorizontal: 14,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 19,
+      backgroundColor: colors.surface,
+    },
+    filterChipActive: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accentSoft,
+    },
     filterChipText: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
     filterChipTextActive: { color: colors.accentStrong },
     shelfControls: { gap: 7, paddingHorizontal: 16, paddingBottom: 8 },
@@ -871,7 +955,7 @@ function createStyles(colors: AppColors) {
     selectedShelfTitle: { flex: 1, color: colors.text, fontSize: 12, fontWeight: '800' },
     shelfActionText: { color: colors.accent, fontSize: 11, fontWeight: '800' },
     shelfDeleteText: { color: colors.danger, fontSize: 11, fontWeight: '800' },
-    listContent: { flexGrow: 1, gap: 12, padding: 16, paddingBottom: 110 },
+    listContent: { flexGrow: 1, gap: 14, paddingHorizontal: 16, paddingTop: 20, paddingBottom: 110 },
     card: { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 18, backgroundColor: colors.surface },
     cardMain: { flexDirection: 'row', gap: 13, padding: 12 },
     cover: { width: 82, height: 110, borderRadius: 11, backgroundColor: colors.surfaceAlt },
