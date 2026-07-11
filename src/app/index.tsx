@@ -20,9 +20,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { LibraryView } from '@/components/library-view';
 import { NovelCard } from '@/components/novel-card';
-import { NovelDetailModal } from '@/components/novel-detail-modal';
 import { PixivLoginModal } from '@/components/pixiv-login-modal';
 import { subscribeNovelChanged } from '@/lib/novel-events';
+import { cacheNovelForRoute } from '@/lib/novel-route-cache';
 import {
   connectPixiv,
   disconnectPixiv,
@@ -136,10 +136,6 @@ export default function HomeScreen() {
     useState<NovelSearchSort>('date_desc');
   const [searchTarget, setSearchTarget] =
     useState<NovelSearchTarget>('keyword');
-  const [selectedNovel, setSelectedNovel] = useState<PixivNovelItem | null>(
-    null,
-  );
-
   const persistRefreshToken = useCallback(async (refreshToken: string) => {
     await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
   }, []);
@@ -389,7 +385,6 @@ export default function HomeScreen() {
   }
 
   const handleNovelChanged = useCallback((changedNovel: PixivNovelItem) => {
-    setSelectedNovel(changedNovel);
     setFeeds((current) => {
       const next = { ...current };
 
@@ -703,7 +698,14 @@ export default function HomeScreen() {
           <NovelCard
             novel={item}
             onPress={() => {
-              setSelectedNovel(item);
+              cacheNovelForRoute(item);
+              router.push({
+                pathname: '/novel/detail/[id]',
+                params: {
+                  bookmarked: item.isBookmarked ? '1' : '0',
+                  id: String(item.id),
+                },
+              });
             }}
             rank={activeTab === 'ranking' ? index + 1 : undefined}
           />
@@ -711,16 +713,6 @@ export default function HomeScreen() {
         />
       )}
 
-      {selectedNovel && (
-        <NovelDetailModal
-          novel={selectedNovel}
-          onClose={() => {
-            setSelectedNovel(null);
-          }}
-          onNovelChanged={handleNovelChanged}
-          onRefreshToken={persistRefreshToken}
-        />
-      )}
 
       <Modal
         animationType="fade"

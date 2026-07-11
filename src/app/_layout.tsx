@@ -30,7 +30,14 @@ function RootNavigator() {
           },
           headerShown: false,
         }}
-      />
+      >
+        <Stack.Screen name="index" />
+        <Stack.Screen
+          name="novel/detail/[id]"
+          options={{ animation: 'slide_from_right' }}
+        />
+        <Stack.Screen name="novel/[id]" options={{ animation: 'none' }} />
+      </Stack>
     </>
   );
 }
