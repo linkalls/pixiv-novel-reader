@@ -2,7 +2,10 @@ import type { PixivNovelItem } from '@book000/pixivts';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -100,6 +103,11 @@ export function ReaderMarksModal({
     };
   }, [detail, visible]);
 
+  function closeModal() {
+    Keyboard.dismiss();
+    onClose();
+  }
+
   async function saveCurrentMark() {
     if (!detail || isSaving) {
       return;
@@ -118,6 +126,7 @@ export function ReaderMarksModal({
       const nextMarks = await listReaderMarks(detail.id);
       setMarks(nextMarks);
       setNote('');
+      Keyboard.dismiss();
       onStatus(`しおりを追加したよ（${Math.round(currentProgress * 100)}%）`);
       const created = nextMarks.find((mark) => mark.id === id);
       if (created) {
@@ -146,6 +155,7 @@ export function ReaderMarksModal({
       );
       setEditingMarkId(null);
       setNote('');
+      Keyboard.dismiss();
       onStatus('メモを更新したよ');
     } catch (saveError) {
       setError(toErrorMessage(saveError));
@@ -171,12 +181,17 @@ export function ReaderMarksModal({
   return (
     <Modal
       animationType="fade"
-      onRequestClose={onClose}
+      onRequestClose={closeModal}
       transparent
       visible={visible}
     >
-      <Pressable onPress={onClose} style={styles.backdrop}>
-        <Pressable onPress={() => {}} style={styles.sheet}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+        style={styles.keyboardAvoider}
+      >
+        <Pressable onPress={closeModal} style={styles.backdrop}>
+          <Pressable onPress={() => {}} style={styles.sheet}>
           <View style={styles.handle} />
           <View style={styles.header}>
             <View style={styles.headerText}>
@@ -189,7 +204,7 @@ export function ReaderMarksModal({
             <Pressable
               accessibilityLabel="しおりを閉じる"
               accessibilityRole="button"
-              onPress={onClose}
+              onPress={closeModal}
               style={({ pressed }) => [
                 styles.closeButton,
                 pressed && styles.pressed,
@@ -260,8 +275,11 @@ export function ReaderMarksModal({
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <ScrollView
+            automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
             contentContainerStyle={styles.list}
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             keyboardShouldPersistTaps="handled"
+            style={styles.scrollArea}
             showsVerticalScrollIndicator={false}
           >
             {isLoading ? (
@@ -280,7 +298,10 @@ export function ReaderMarksModal({
                 <View key={mark.id} style={styles.markCard}>
                   <Pressable
                     accessibilityRole="button"
-                    onPress={() => onJump(mark)}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      onJump(mark);
+                    }}
                     style={({ pressed }) => [
                       styles.markMain,
                       pressed && styles.pressed,
@@ -335,8 +356,9 @@ export function ReaderMarksModal({
               ))
             )}
           </ScrollView>
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -354,6 +376,7 @@ function createStyles(colors: {
   text: string;
 }) {
   return StyleSheet.create({
+    keyboardAvoider: { flex: 1 },
     backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay },
     sheet: {
       width: '100%',
@@ -384,6 +407,7 @@ function createStyles(colors: {
     saveButton: { minWidth: 120, minHeight: 40, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, borderRadius: 12, backgroundColor: colors.accent },
     saveText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
     error: { marginTop: 8, color: '#D75555', fontSize: 12, lineHeight: 18 },
+    scrollArea: { flexShrink: 1 },
     list: { gap: 10, paddingTop: 12, paddingBottom: 16 },
     loading: { minHeight: 160, alignItems: 'center', justifyContent: 'center' },
     empty: { minHeight: 150, alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 20 },

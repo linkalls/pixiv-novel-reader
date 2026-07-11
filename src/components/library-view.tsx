@@ -5,7 +5,10 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -176,6 +179,11 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
     );
   }
 
+  function closeShelfEditor() {
+    Keyboard.dismiss();
+    setIsShelfEditorVisible(false);
+  }
+
   function openShelfEditor(editorMode: ShelfEditorMode) {
     setShelfEditorMode(editorMode);
     setShelfName(editorMode === 'rename' ? (selectedShelf?.name ?? '') : '');
@@ -191,6 +199,7 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
     try {
       if (shelfEditorMode === 'rename' && selectedShelfId) {
         await renameBookshelf(selectedShelfId, shelfName);
+        Keyboard.dismiss();
         setIsShelfEditorVisible(false);
         setShelfName('');
         await loadItems();
@@ -203,6 +212,7 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
       setSelectedShelfId(created.id);
       setItems(await listBookshelfNovels(created.id));
       setMarks([]);
+      Keyboard.dismiss();
       setIsShelfEditorVisible(false);
       setShelfName('');
     } catch (error) {
@@ -414,15 +424,20 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
 
       <Modal
         animationType="fade"
-        onRequestClose={() => setIsShelfEditorVisible(false)}
+        onRequestClose={closeShelfEditor}
         transparent
         visible={isShelfEditorVisible}
       >
-        <Pressable
-          onPress={() => setIsShelfEditorVisible(false)}
-          style={styles.modalBackdrop}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+          style={styles.keyboardAvoider}
         >
-          <Pressable onPress={() => {}} style={styles.editorModal}>
+          <Pressable
+            onPress={closeShelfEditor}
+            style={styles.modalBackdrop}
+          >
+            <Pressable onPress={() => {}} style={styles.editorModal}>
             <Text style={styles.editorTitle}>
               {shelfEditorMode === 'create' ? '新しい本棚' : '本棚の名前変更'}
             </Text>
@@ -440,7 +455,7 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
             <View style={styles.editorButtons}>
               <Pressable
                 accessibilityRole="button"
-                onPress={() => setIsShelfEditorVisible(false)}
+                onPress={closeShelfEditor}
                 style={({ pressed }) => [
                   styles.cancelButton,
                   pressed && styles.pressed,
@@ -462,8 +477,9 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
                 <Text style={styles.saveText}>保存</Text>
               </Pressable>
             </View>
+            </Pressable>
           </Pressable>
-        </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -867,6 +883,7 @@ function createStyles(colors: AppColors) {
     emptyIcon: { fontSize: 38 },
     emptyTitle: { color: colors.text, fontSize: 17, fontWeight: '800', textAlign: 'center' },
     emptyText: { color: colors.textMuted, fontSize: 12, lineHeight: 19, textAlign: 'center' },
+    keyboardAvoider: { flex: 1 },
     modalBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.overlay },
     editorModal: { width: '100%', maxWidth: 460, gap: 14, padding: 20, borderRadius: 18, backgroundColor: colors.surface },
     editorTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },

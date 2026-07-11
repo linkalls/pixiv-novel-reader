@@ -2,7 +2,10 @@ import type { PixivNovelItem } from '@book000/pixivts';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -95,6 +98,11 @@ export function BookshelfPickerModal({
     };
   }, [detail, visible]);
 
+  function closeModal() {
+    Keyboard.dismiss();
+    onClose();
+  }
+
   async function toggleShelf(shelf: Bookshelf) {
     if (!detail || busyShelfId !== null) {
       return;
@@ -152,6 +160,7 @@ export function BookshelfPickerModal({
       setShelves((current) => [...current, { ...created, itemCount: 1 }]);
       setMemberships((current) => new Set(current).add(created.id));
       setNewName('');
+      Keyboard.dismiss();
       onStatus(`「${created.name}」を作って追加したよ`);
     } catch (createError) {
       setError(toErrorMessage(createError));
@@ -163,12 +172,17 @@ export function BookshelfPickerModal({
   return (
     <Modal
       animationType="fade"
-      onRequestClose={onClose}
+      onRequestClose={closeModal}
       transparent
       visible={visible}
     >
-      <Pressable onPress={onClose} style={styles.backdrop}>
-        <Pressable onPress={() => {}} style={styles.sheet}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+        style={styles.keyboardAvoider}
+      >
+        <Pressable onPress={closeModal} style={styles.backdrop}>
+          <Pressable onPress={() => {}} style={styles.sheet}>
           <View style={styles.handle} />
           <View style={styles.header}>
             <View style={styles.headerText}>
@@ -181,7 +195,7 @@ export function BookshelfPickerModal({
             <Pressable
               accessibilityLabel="本棚を閉じる"
               accessibilityRole="button"
-              onPress={onClose}
+              onPress={closeModal}
               style={({ pressed }) => [
                 styles.closeButton,
                 pressed && styles.pressed,
@@ -200,8 +214,11 @@ export function BookshelfPickerModal({
             </View>
           ) : (
             <ScrollView
+              automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
               contentContainerStyle={styles.list}
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               keyboardShouldPersistTaps="handled"
+              style={styles.scrollArea}
               showsVerticalScrollIndicator={false}
             >
               {shelves.map((shelf) => {
@@ -270,8 +287,9 @@ export function BookshelfPickerModal({
               <Text style={styles.createButtonText}>作成</Text>
             </Pressable>
           </View>
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -292,6 +310,9 @@ function createStyles(colors: {
   text: string;
 }) {
   return StyleSheet.create({
+    keyboardAvoider: {
+      flex: 1,
+    },
     backdrop: {
       flex: 1,
       justifyContent: 'flex-end',
@@ -355,6 +376,9 @@ function createStyles(colors: {
       alignItems: 'center',
       justifyContent: 'center',
       gap: 10,
+    },
+    scrollArea: {
+      flexShrink: 1,
     },
     list: { paddingBottom: 8 },
     row: {
