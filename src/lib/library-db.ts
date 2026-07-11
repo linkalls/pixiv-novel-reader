@@ -11,6 +11,7 @@ export interface LibraryNovel {
   title: string;
   authorName: string;
   coverUrl: string | null;
+  tags: string[];
   textLength: number;
   progress: number;
   scrollOffset: number;
@@ -31,6 +32,7 @@ interface HistoryRow {
   title: string;
   author_name: string;
   cover_url: string | null;
+  tags_json: string;
   text_length: number;
   progress: number;
   scroll_offset: number;
@@ -68,6 +70,7 @@ async function getDatabase(): Promise<SQLiteDatabase> {
           title TEXT NOT NULL,
           author_name TEXT NOT NULL,
           cover_url TEXT,
+          tags_json TEXT NOT NULL DEFAULT '[]',
           text_length INTEGER NOT NULL DEFAULT 0,
           progress REAL NOT NULL DEFAULT 0,
           scroll_offset REAL NOT NULL DEFAULT 0,
@@ -88,6 +91,7 @@ async function getDatabase(): Promise<SQLiteDatabase> {
           ON offline_novels(saved_at DESC);
       `);
 
+      await ensureReadingHistoryTagsColumn(database);
       return database;
     });
   }
@@ -129,16 +133,18 @@ export async function recordNovelOpened(
         title,
         author_name,
         cover_url,
+        tags_json,
         text_length,
         progress,
         scroll_offset,
         is_finished,
         last_read_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(novel_id) DO UPDATE SET
         title = excluded.title,
         author_name = excluded.author_name,
         cover_url = excluded.cover_url,
+        tags_json = excluded.tags_json,
         text_length = excluded.text_length,
         progress = MAX(reading_history.progress, excluded.progress),
         scroll_offset = CASE
@@ -153,6 +159,7 @@ export async function recordNovelOpened(
     detail.title,
     detail.user.name,
     coverUrl,
+    JSON.stringify(normalizeTagNames(detail.tags)),
     detail.textLength,
     clampProgress(progress),
     Math.max(0, scrollOffset),
@@ -202,7 +209,8 @@ export async function listReadingHistory(
   options: ReadingHistoryQuery = {},
 ): Promise<LibraryNovel[]> {
   const database = await getDatabase();
-  const query = options.query?.trim().toLocaleLowerCase('ja-JP') ?? '';
+  const query =
+    options.query?.trim().replace(/^#+/, '').toLocaleLowerCase('ja-JP') ?? '';
   const filter = options.filter ?? 'all';
   const sort = options.sort ?? 'recent';
   const limit = Math.max(1, Math.min(500, options.limit ?? 200));
@@ -211,10 +219,10 @@ export async function listReadingHistory(
 
   if (query.length > 0) {
     conditions.push(
-      '(LOWER(h.title) LIKE ? OR LOWER(h.author_name) LIKE ?)',
+      '(LOWER(h.title) LIKE ? OR LOWER(h.author_name) LIKE ? OR LOWER(h.tags_json) LIKE ?)',
     );
     const likeQuery = `%${query}%`;
-    parameters.push(likeQuery, likeQuery);
+    parameters.push(likeQuery, likeQuery, likeQuery);
   }
 
   if (filter === 'reading') {
@@ -366,6 +374,7 @@ export async function listOfflineNovels(limit = 100): Promise<LibraryNovel[]> {
           detail.imageUrls.squareMedium ||
           detail.imageUrls.large ||
           null,
+        tags: normalizeTagNames(detail.tags),
         textLength: detail.textLength,
         progress: clampProgress(row.progress ?? 0),
         scrollOffset: Math.max(0, row.scroll_offset ?? 0),
@@ -389,6 +398,7 @@ function historySelectSql(whereClause: string): string {
       h.title,
       h.author_name,
       h.cover_url,
+      h.tags_json,
       h.text_length,
       h.progress,
       h.scroll_offset,
@@ -408,6 +418,7 @@ function mapHistoryRow(row: HistoryRow): LibraryNovel {
     title: row.title,
     authorName: row.author_name,
     coverUrl: row.cover_url,
+    tags: parseTagNames(row.tags_json),
     textLength: row.text_length,
     progress: clampProgress(row.progress),
     scrollOffset: Math.max(0, row.scroll_offset),
@@ -416,6 +427,49 @@ function mapHistoryRow(row: HistoryRow): LibraryNovel {
     isOffline: row.is_offline === 1,
     savedAt: row.saved_at,
   };
+}
+
+async function ensureReadingHistoryTagsColumn(
+  database: SQLiteDatabase,
+): Promise<void> {
+  const columns = await database.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(reading_history)',
+  );
+
+  if (columns.some((column) => column.name === 'tags_json')) {
+    return;
+  }
+
+  await database.execAsync(
+    "ALTER TABLE reading_history ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+  );
+}
+
+function normalizeTagNames(tags: readonly { name: string }[]): string[] {
+  const unique = new Set<string>();
+
+  for (const tag of tags) {
+    const name = tag.name.trim();
+    if (name.length > 0) {
+      unique.add(name);
+    }
+  }
+
+  return Array.from(unique);
+}
+
+function parseTagNames(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed
+          .filter((tag): tag is string => typeof tag === 'string')
+          .map((tag) => tag.trim())
+          .filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function clampProgress(progress: number): number {

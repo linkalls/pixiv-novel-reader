@@ -51,6 +51,7 @@ interface LibraryViewProps {
     resume: boolean,
     scrollOffset?: number,
   ) => void;
+  onTagPress: (tagName: string) => void;
 }
 
 const HISTORY_FILTERS: { value: ReadingHistoryFilter; label: string }[] = [
@@ -66,7 +67,10 @@ const HISTORY_SORTS: { value: ReadingHistorySort; label: string }[] = [
   { value: 'title', label: '作品名順' },
 ];
 
-export function LibraryView({ onOpenNovel }: LibraryViewProps) {
+export function LibraryView({
+  onOpenNovel,
+  onTagPress,
+}: LibraryViewProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [mode, setMode] = useState<LibraryMode>('history');
@@ -418,6 +422,7 @@ export function LibraryView({ onOpenNovel }: LibraryViewProps) {
             <LibraryNovelCard
               item={item}
               mode={mode}
+              onTagPress={onTagPress}
               onOpen={() => {
                 onOpenNovel(
                   item.novelId,
@@ -550,7 +555,7 @@ function HistoryControls({
         <View style={styles.historySectionHeader}>
           <View style={styles.historyHeadingText}>
             <Text style={styles.historySectionLabel}>履歴を検索</Text>
-            <Text style={styles.historySectionHint}>作品名または作者名</Text>
+            <Text style={styles.historySectionHint}>作品名・作者名・タグ</Text>
           </View>
           {onClear ? (
             <Pressable
@@ -570,7 +575,7 @@ function HistoryControls({
           autoCapitalize="none"
           autoCorrect={false}
           onChangeText={onQueryChange}
-          placeholder="作品名・作者名を入力"
+          placeholder="作品名・作者名・タグを入力"
           placeholderTextColor={colors.placeholder}
           returnKeyType="search"
           style={styles.searchInput}
@@ -674,11 +679,13 @@ function LibraryNovelCard({
   mode,
   onOpen,
   onRemove,
+  onTagPress,
 }: {
   item: LibraryNovel;
   mode: LibraryMode;
   onOpen: () => void;
   onRemove?: () => void;
+  onTagPress: (tagName: string) => void;
 }) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -717,6 +724,29 @@ function LibraryNovelCard({
             ) : null}
           </View>
           <Text numberOfLines={1} style={styles.author}>{item.authorName}</Text>
+          {item.tags.length > 0 ? (
+            <View style={styles.libraryTagsRow}>
+              {item.tags.slice(0, 3).map((tagName) => (
+                <Pressable
+                  accessibilityLabel={`タグ「${tagName}」で検索`}
+                  accessibilityRole="button"
+                  key={tagName}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    onTagPress(tagName);
+                  }}
+                  style={({ pressed }) => [
+                    styles.libraryTagChip,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text numberOfLines={1} style={styles.libraryTagText}>
+                    #{tagName}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
           <Text style={styles.meta}>
             {item.textLength.toLocaleString()}字 ・ {formatRelativeTime(item.lastReadAt)}
           </Text>
@@ -1003,6 +1033,23 @@ function createStyles(colors: AppColors) {
       letterSpacing: 0.5,
     },
     author: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
+    libraryTagsRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+    },
+    libraryTagChip: {
+      maxWidth: '100%',
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 999,
+      backgroundColor: colors.accentSoft,
+    },
+    libraryTagText: {
+      color: colors.accentStrong,
+      fontSize: 10,
+      fontWeight: '700',
+    },
     meta: { color: colors.textMuted, fontSize: 10, lineHeight: 16 },
     progressRow: {
       flexDirection: 'row',

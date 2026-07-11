@@ -206,6 +206,7 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'title',
     'author_name',
     'cover_url',
+    'tags_json',
     'text_length',
     'progress',
     'scroll_offset',

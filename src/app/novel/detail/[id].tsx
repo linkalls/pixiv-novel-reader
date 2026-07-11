@@ -477,9 +477,23 @@ export default function NovelDetailScreen() {
         {detail.tags.length > 0 ? (
           <View style={styles.tagsRow}>
             {detail.tags.map((tag) => (
-              <View key={tag.name} style={styles.tagChip}>
+              <Pressable
+                accessibilityLabel={`タグ「${tag.name}」で検索`}
+                accessibilityRole="button"
+                key={tag.name}
+                onPress={() => {
+                  router.push({
+                    pathname: '/',
+                    params: { tag: tag.name },
+                  });
+                }}
+                style={({ pressed }) => [
+                  styles.tagChip,
+                  pressed && styles.pressed,
+                ]}
+              >
                 <Text style={styles.tagText}>#{tag.name}</Text>
-              </View>
+              </Pressable>
             ))}
           </View>
         ) : null}

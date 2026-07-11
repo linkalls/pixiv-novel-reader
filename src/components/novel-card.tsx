@@ -9,15 +9,18 @@ interface NovelCardProps {
   novel: PixivNovelItem;
   rank?: number;
   onPress: () => void;
+  onTagPress?: (tagName: string) => void;
 }
 
-export function NovelCard({ novel, rank, onPress }: NovelCardProps) {
+export function NovelCard({
+  novel,
+  rank,
+  onPress,
+  onTagPress,
+}: NovelCardProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const tags = novel.tags
-    .slice(0, 3)
-    .map((tag) => `#${tag.name}`)
-    .join('  ');
+  const tags = novel.tags.slice(0, 3);
 
   return (
     <Pressable
@@ -59,9 +62,27 @@ export function NovelCard({ novel, rank, onPress }: NovelCardProps) {
         </Text>
 
         {tags.length > 0 && (
-          <Text numberOfLines={1} style={styles.tags}>
-            {tags}
-          </Text>
+          <View style={styles.tagsRow}>
+            {tags.map((tag) => (
+              <Pressable
+                accessibilityLabel={`タグ「${tag.name}」で検索`}
+                accessibilityRole="button"
+                key={tag.name}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  onTagPress?.(tag.name);
+                }}
+                style={({ pressed }) => [
+                  styles.tagChip,
+                  pressed && styles.tagChipPressed,
+                ]}
+              >
+                <Text numberOfLines={1} style={styles.tagText}>
+                  #{tag.name}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
         )}
 
         <View style={styles.metaRow}>
@@ -148,9 +169,25 @@ function createStyles(colors: AppColors) {
       fontSize: 13,
       fontWeight: '600',
     },
-    tags: {
+    tagsRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+    },
+    tagChip: {
+      maxWidth: '100%',
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 999,
+      backgroundColor: colors.accentSoft,
+    },
+    tagChipPressed: {
+      opacity: 0.65,
+    },
+    tagText: {
       color: colors.accentStrong,
-      fontSize: 11,
+      fontSize: 10,
+      fontWeight: '700',
     },
     metaRow: {
       flexDirection: 'row',

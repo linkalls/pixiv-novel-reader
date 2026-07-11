@@ -484,6 +484,9 @@ function mapDetailToLibraryNovel(
     title: detail.title,
     authorName: detail.user.name,
     coverUrl: getCoverUrl(detail),
+    tags: detail.tags
+      .map((tag) => tag.name.trim())
+      .filter((tagName) => tagName.length > 0),
     textLength: detail.textLength,
     progress: clampProgress(row.progress ?? 0),
     scrollOffset: Math.max(0, row.scroll_offset ?? 0),

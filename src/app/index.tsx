@@ -1,6 +1,6 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import * as SecureStore from 'expo-secure-store';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -105,6 +105,9 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
 
 export default function HomeScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ tag?: string | string[] }>();
+  const requestedTag = Array.isArray(params.tag) ? params.tag[0] : params.tag;
+  const handledTagRef = useRef<string | null>(null);
   const { colors, isDark, mode: themeMode, setMode: setThemeMode } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [activeTab, setActiveTab] = useState<AppTab>('recommended');
@@ -249,6 +252,40 @@ export default function HomeScreen() {
       updateFeed,
     ],
   );
+
+  const openTagSearch = useCallback(
+    (rawTagName: string) => {
+      const tagName = rawTagName.trim().replace(/^#+/, '');
+      if (tagName.length === 0) {
+        return;
+      }
+
+      setActiveTab('search');
+      setSearchWord(tagName);
+      setSubmittedSearchWord(tagName);
+      setSearchTarget('exact_match_for_tags');
+      void requestFeed('search', {
+        searchWord: tagName,
+        searchSort,
+        searchTarget: 'exact_match_for_tags',
+      });
+    },
+    [requestFeed, searchSort],
+  );
+
+  useEffect(() => {
+    if (
+      isBooting ||
+      !isAuthenticated ||
+      !requestedTag ||
+      handledTagRef.current === requestedTag
+    ) {
+      return;
+    }
+
+    handledTagRef.current = requestedTag;
+    openTagSearch(requestedTag);
+  }, [isAuthenticated, isBooting, openTagSearch, requestedTag]);
 
   const connectWithToken = useCallback(
     async (
@@ -603,6 +640,7 @@ export default function HomeScreen() {
 
       {activeTab === 'library' ? (
         <LibraryView
+          onTagPress={openTagSearch}
           onOpenNovel={(novelId, resume, scrollOffset) => {
             router.push({
               pathname: '/novel/[id]',
@@ -700,6 +738,7 @@ export default function HomeScreen() {
         renderItem={({ item, index }) => (
           <NovelCard
             novel={item}
+            onTagPress={openTagSearch}
             onPress={() => {
               cacheNovelForRoute(item);
               router.push({
