@@ -1,7 +1,11 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import * as SecureStore from 'expo-secure-store';
 import { Image } from 'expo-image';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import {
+  useFocusEffect,
+  useLocalSearchParams,
+  useRouter,
+} from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -19,6 +23,7 @@ import {
   type BookmarkState,
   type BookmarkStateSource,
 } from '@/lib/bookmark-state';
+import { getReadingHistory, type LibraryNovel } from '@/lib/library-db';
 import {
   emitNovelChanged,
   subscribeNovelChanged,
@@ -54,6 +59,7 @@ export default function NovelDetailScreen() {
   const [isDetailLoading, setIsDetailLoading] = useState(isValidNovelId);
   const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
   const [isOpeningReader, setIsOpeningReader] = useState(false);
+  const [readingHistory, setReadingHistory] = useState<LibraryNovel | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(
     isValidNovelId ? null : '作品IDを読み取れなかったよ',
@@ -148,6 +154,40 @@ export default function NovelDetailScreen() {
     () => (detail ? stripHtml(detail.caption) : ''),
     [detail],
   );
+  const canResume = Boolean(
+    readingHistory &&
+      !readingHistory.isFinished &&
+      (readingHistory.progress >= 0.01 || readingHistory.scrollOffset > 0),
+  );
+  const progressPercent = readingHistory
+    ? Math.min(100, Math.max(0, Math.round(readingHistory.progress * 100)))
+    : 0;
+
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      if (!isValidNovelId) {
+        return () => {
+          isActive = false;
+        };
+      }
+
+      void getReadingHistory(novelId)
+        .then((history) => {
+          if (isActive) {
+            setReadingHistory(history);
+          }
+        })
+        .catch(() => {
+          // 履歴が壊れていても、作品詳細と読書自体は利用できるようにする。
+        });
+
+      return () => {
+        isActive = false;
+      };
+    }, [isValidNovelId, novelId]),
+  );
 
   useEffect(() => {
     return subscribeNovelChanged((changedNovel) => {
@@ -206,7 +246,7 @@ export default function NovelDetailScreen() {
     }
   }
 
-  function openReaderFromBeginning() {
+  function openReader(resume: boolean) {
     if (!detail || isOpeningReader) {
       return;
     }
@@ -224,7 +264,9 @@ export default function NovelDetailScreen() {
         pathname: '/novel/[id]',
         params: {
           bookmarked: bookmarkState.value ? '1' : '0',
+          fromDetail: '1',
           id: String(detail.id),
+          ...(resume ? { resume: '1' } : {}),
         },
       });
 
@@ -342,17 +384,63 @@ export default function NovelDetailScreen() {
           </View>
         </View>
 
-        <Pressable
-          accessibilityRole="button"
-          disabled={isOpeningReader}
-          onPress={openReaderFromBeginning}
-          style={({ pressed }) => [
-            styles.readButton,
-            pressed && styles.pressed,
-          ]}
-        >
-          <Text style={styles.readButtonText}>最初から読む</Text>
-        </Pressable>
+        <View style={styles.readActions}>
+          <Pressable
+            accessibilityLabel={
+              canResume
+                ? `続きから読む、現在${progressPercent}パーセント`
+                : readingHistory?.isFinished
+                  ? 'もう一度最初から読む'
+                  : '最初から読む'
+            }
+            accessibilityRole="button"
+            disabled={isOpeningReader}
+            onPress={() => {
+              openReader(canResume);
+            }}
+            style={({ pressed }) => [
+              styles.readButton,
+              pressed && styles.pressed,
+              isOpeningReader && styles.disabled,
+            ]}
+          >
+            <Text style={styles.readButtonText}>
+              {canResume
+                ? `続きから読む  ${progressPercent}%`
+                : readingHistory?.isFinished
+                  ? 'もう一度読む'
+                  : '最初から読む'}
+            </Text>
+          </Pressable>
+
+          {canResume ? (
+            <>
+              <View style={styles.readProgressTrack}>
+                <View
+                  style={[
+                    styles.readProgressValue,
+                    { width: `${progressPercent}%` },
+                  ]}
+                />
+              </View>
+              <Text style={styles.readProgressText}>前回はここまで読んだよ</Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isOpeningReader}
+                onPress={() => {
+                  openReader(false);
+                }}
+                style={({ pressed }) => [
+                  styles.restartButton,
+                  pressed && styles.pressed,
+                  isOpeningReader && styles.disabled,
+                ]}
+              >
+                <Text style={styles.restartButtonText}>最初から読む</Text>
+              </Pressable>
+            </>
+          ) : null}
+        </View>
 
         <Pressable
           accessibilityRole="button"
@@ -544,6 +632,41 @@ function createStyles(colors: AppColors) {
     meta: {
       color: colors.textMuted,
       fontSize: 12,
+    },
+    readActions: {
+      gap: 9,
+    },
+    readProgressTrack: {
+      height: 4,
+      overflow: 'hidden',
+      borderRadius: 999,
+      backgroundColor: colors.border,
+    },
+    readProgressValue: {
+      height: '100%',
+      borderRadius: 999,
+      backgroundColor: colors.accent,
+    },
+    readProgressText: {
+      color: colors.textMuted,
+      fontSize: 11,
+      fontWeight: '700',
+      textAlign: 'center',
+    },
+    restartButton: {
+      minHeight: 46,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 18,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      borderRadius: 14,
+      backgroundColor: colors.surface,
+    },
+    restartButtonText: {
+      color: colors.textSecondary,
+      fontSize: 13,
+      fontWeight: '900',
     },
     readButton: {
       minHeight: 54,

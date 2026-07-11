@@ -45,6 +45,7 @@ import {
   updateReadingProgress,
 } from '@/lib/library-db';
 import { emitNovelChanged } from '@/lib/novel-events';
+import { cacheNovelForRoute } from '@/lib/novel-route-cache';
 import { parseNovelBlocks, type NovelBlock } from '@/lib/novel-format';
 import {
   fetchNovelDetail,
@@ -156,16 +157,21 @@ export default function NovelReaderScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     bookmarked?: string | string[];
+    fromDetail?: string | string[];
     id?: string | string[];
     resume?: string | string[];
   }>();
   const { colors, isDark: isAppDark } = useAppTheme();
   const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const rawFromDetail = Array.isArray(params.fromDetail)
+    ? params.fromDetail[0]
+    : params.fromDetail;
   const rawResume = Array.isArray(params.resume)
     ? params.resume[0]
     : params.resume;
   const novelId = Number(rawId);
   const isValidNovelId = Number.isInteger(novelId) && novelId > 0;
+  const openedFromDetail = rawFromDetail === '1';
   const shouldResume = rawResume === '1';
   const routeBookmarkState = parseBookmarkRouteParam(params.bookmarked);
 
@@ -1000,6 +1006,31 @@ export default function NovelReaderScreen() {
         onClose={() => {
           setIsMoreVisible(false);
         }}
+        onOpenDetail={() => {
+          setIsMoreVisible(false);
+
+          if (detail) {
+            cacheNovelForRoute({
+              ...detail,
+              isBookmarked: bookmarkState.value ?? detail.isBookmarked,
+            });
+          }
+
+          requestAnimationFrame(() => {
+            if (openedFromDetail) {
+              router.back();
+              return;
+            }
+
+            router.push({
+              pathname: '/novel/detail/[id]',
+              params: {
+                bookmarked: bookmarkState.value ? '1' : '0',
+                id: String(novelId),
+              },
+            });
+          });
+        }}
         onOpenPixiv={() => {
           setIsMoreVisible(false);
           void Linking.openURL(
@@ -1504,6 +1535,7 @@ interface MoreActionsModalProps {
   isOfflineLoading: boolean;
   isOfflineSaved: boolean;
   onClose: () => void;
+  onOpenDetail: () => void;
   onOpenPixiv: () => void;
   onOpenSettings: () => void;
   onReload: () => void;
@@ -1518,6 +1550,7 @@ function MoreActionsModal({
   isOfflineLoading,
   isOfflineSaved,
   onClose,
+  onOpenDetail,
   onOpenPixiv,
   onOpenSettings,
   onReload,
@@ -1548,6 +1581,11 @@ function MoreActionsModal({
           <SheetAction
             label="Aa  表示設定"
             onPress={onOpenSettings}
+            palette={palette}
+          />
+          <SheetAction
+            label="作品詳細を開く"
+            onPress={onOpenDetail}
             palette={palette}
           />
           <SheetAction
