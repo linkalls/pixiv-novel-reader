@@ -17,6 +17,7 @@ import {
 import { getLibraryDatabase } from './library-db';
 import { ensureOrganizerStorage } from './organizer-db';
 import { ensureReadingStatsStorage } from './reading-stats-db';
+import { ensureSearchHistoryStorage } from './search-history-db';
 
 const READER_SETTINGS_KEY = 'pixiv-reader-settings-v1';
 const THEME_MODE_KEY = 'app-theme-mode';
@@ -29,6 +30,7 @@ const BACKUP_TABLES = [
   'reader_marks',
   'recommendation_exclusions',
   'reading_sessions',
+  'search_history',
 ] as const;
 
 type BackupTableName = (typeof BACKUP_TABLES)[number];
@@ -47,7 +49,11 @@ export async function exportAppBackup(): Promise<BackupExportResult> {
     throw new Error('バックアップ用の一時保存領域を利用できません');
   }
 
-  await Promise.all([ensureOrganizerStorage(), ensureReadingStatsStorage()]);
+  await Promise.all([
+    ensureOrganizerStorage(),
+    ensureReadingStatsStorage(),
+    ensureSearchHistoryStorage(),
+  ]);
   const database = await getLibraryDatabase();
   const tables: Record<string, unknown[]> = {};
 
@@ -113,12 +119,19 @@ export async function restoreAppBackup(
   payload: AppBackupPayload,
 ): Promise<BackupRestoreResult> {
   for (const table of BACKUP_TABLES) {
+    if (table === 'search_history' && payload.tables[table] === undefined) {
+      continue;
+    }
     if (!Array.isArray(payload.tables[table])) {
       throw new Error(`バックアップに${table}が含まれていません`);
     }
   }
 
-  await Promise.all([ensureOrganizerStorage(), ensureReadingStatsStorage()]);
+  await Promise.all([
+    ensureOrganizerStorage(),
+    ensureReadingStatsStorage(),
+    ensureSearchHistoryStorage(),
+  ]);
   const database = await getLibraryDatabase();
   let restoredRows = 0;
 
@@ -141,6 +154,11 @@ export async function restoreAppBackup(
       payload.tables.recommendation_exclusions,
     );
     restoredRows += await restoreRows(transaction, 'reading_sessions', payload.tables.reading_sessions);
+    restoredRows += await restoreRows(
+      transaction,
+      'search_history',
+      payload.tables.search_history ?? [],
+    );
   });
 
   await database.execAsync(`
@@ -248,6 +266,14 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'start_progress',
     'end_progress',
     'characters_read',
+  ],
+  search_history: [
+    'word',
+    'sort',
+    'target',
+    'searched_at',
+    'use_count',
+    'is_pinned',
   ],
 };
 

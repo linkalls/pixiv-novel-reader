@@ -32,6 +32,8 @@ export interface AppColors {
   bookmark: string;
   danger: string;
   dangerSoft: string;
+  success: string;
+  successSoft: string;
   warning: string;
   overlay: string;
   shadow: string;
@@ -60,6 +62,8 @@ const LIGHT_COLORS: AppColors = {
   bookmark: '#FFB000',
   danger: '#C73848',
   dangerSoft: '#FFF0F2',
+  success: '#147D64',
+  successSoft: '#E8F7F2',
   warning: '#8B6A00',
   overlay: 'rgba(17, 26, 35, 0.48)',
   shadow: '#17212B',
@@ -88,6 +92,8 @@ const DARK_COLORS: AppColors = {
   bookmark: '#FFC247',
   danger: '#FF7B86',
   dangerSoft: '#3B1D24',
+  success: '#62D6B5',
+  successSoft: '#16372F',
   warning: '#E8C85B',
   overlay: 'rgba(0, 0, 0, 0.68)',
   shadow: '#000000',

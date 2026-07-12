@@ -3,11 +3,13 @@ import { Image } from 'expo-image';
 import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import type { NovelReadingStatus } from '@/lib/library-db';
 import { type AppColors, useAppTheme } from '@/theme';
 
 interface NovelCardProps {
   novel: PixivNovelItem;
   rank?: number;
+  readingStatus?: NovelReadingStatus;
   onPress: () => void;
   onTagPress?: (tagName: string) => void;
 }
@@ -15,6 +17,7 @@ interface NovelCardProps {
 export function NovelCard({
   novel,
   rank,
+  readingStatus,
   onPress,
   onTagPress,
 }: NovelCardProps) {
@@ -60,6 +63,38 @@ export function NovelCard({
         <Text numberOfLines={1} style={styles.author}>
           {novel.user.name}
         </Text>
+
+        {readingStatus ? (
+          <View style={styles.readingStatusRow}>
+            {readingStatus.isFinished ? (
+              <View style={styles.finishedBadge}>
+                <Text style={styles.finishedBadgeText}>読了</Text>
+              </View>
+            ) : readingStatus.progress > 0 ? (
+              <View style={styles.readingBadge}>
+                <Text style={styles.readingBadgeText}>
+                  読書中 {Math.max(1, Math.round(readingStatus.progress * 100))}%
+                </Text>
+              </View>
+            ) : null}
+            {readingStatus.isOffline ? (
+              <View style={styles.offlineBadge}>
+                <Text style={styles.offlineBadgeText}>保存済み</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {readingStatus && !readingStatus.isFinished && readingStatus.progress > 0 ? (
+          <View style={styles.readingProgressTrack}>
+            <View
+              style={[
+                styles.readingProgressValue,
+                { width: `${Math.round(readingStatus.progress * 100)}%` },
+              ]}
+            />
+          </View>
+        ) : null}
 
         {tags.length > 0 && (
           <View style={styles.tagsRow}>
@@ -168,6 +203,56 @@ function createStyles(colors: AppColors) {
       color: colors.textSecondary,
       fontSize: 13,
       fontWeight: '600',
+    },
+    readingStatusRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: 6,
+    },
+    readingBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 999,
+      backgroundColor: colors.accentSoft,
+    },
+    readingBadgeText: {
+      color: colors.accentStrong,
+      fontSize: 10,
+      fontWeight: '800',
+    },
+    finishedBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 999,
+      backgroundColor: colors.successSoft,
+    },
+    finishedBadgeText: {
+      color: colors.success,
+      fontSize: 10,
+      fontWeight: '800',
+    },
+    offlineBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 999,
+      backgroundColor: colors.surfaceAlt,
+    },
+    offlineBadgeText: {
+      color: colors.textSecondary,
+      fontSize: 10,
+      fontWeight: '800',
+    },
+    readingProgressTrack: {
+      height: 4,
+      overflow: 'hidden',
+      borderRadius: 999,
+      backgroundColor: colors.surfaceAlt,
+    },
+    readingProgressValue: {
+      height: '100%',
+      borderRadius: 999,
+      backgroundColor: colors.accent,
     },
     tagsRow: {
       flexDirection: 'row',

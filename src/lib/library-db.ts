@@ -27,6 +27,12 @@ export interface OfflineNovelRecord {
   savedAt: number;
 }
 
+export interface NovelReadingStatus {
+  progress: number;
+  isFinished: boolean;
+  isOffline: boolean;
+}
+
 interface HistoryRow {
   novel_id: number;
   title: string;
@@ -203,6 +209,54 @@ export async function getReadingHistory(
   );
 
   return row ? mapHistoryRow(row) : null;
+}
+
+export async function getNovelReadingStatuses(
+  novelIds: readonly number[],
+): Promise<Map<number, NovelReadingStatus>> {
+  const uniqueIds = Array.from(
+    new Set(
+      novelIds.filter(
+        (novelId) => Number.isInteger(novelId) && novelId > 0,
+      ),
+    ),
+  ).slice(0, 500);
+
+  if (uniqueIds.length === 0) {
+    return new Map();
+  }
+
+  const database = await getDatabase();
+  const placeholders = uniqueIds.map(() => '?').join(', ');
+  const rows = await database.getAllAsync<{
+    novel_id: number;
+    progress: number;
+    is_finished: number;
+    is_offline: number;
+  }>(
+    `
+      SELECT
+        h.novel_id,
+        h.progress,
+        h.is_finished,
+        CASE WHEN o.novel_id IS NULL THEN 0 ELSE 1 END AS is_offline
+      FROM reading_history h
+      LEFT JOIN offline_novels o ON o.novel_id = h.novel_id
+      WHERE h.novel_id IN (${placeholders})
+    `,
+    ...uniqueIds,
+  );
+
+  return new Map(
+    rows.map((row) => [
+      row.novel_id,
+      {
+        progress: clampProgress(row.progress),
+        isFinished: row.is_finished === 1,
+        isOffline: row.is_offline === 1,
+      },
+    ]),
+  );
 }
 
 export async function listReadingHistory(

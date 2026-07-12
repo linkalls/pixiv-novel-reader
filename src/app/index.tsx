@@ -1,6 +1,6 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import * as SecureStore from 'expo-secure-store';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -21,6 +21,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LibraryView } from '@/components/library-view';
 import { NovelCard } from '@/components/novel-card';
 import { PixivLoginModal } from '@/components/pixiv-login-modal';
+import {
+  getNovelReadingStatuses,
+  type NovelReadingStatus,
+} from '@/lib/library-db';
 import { subscribeNovelChanged } from '@/lib/novel-events';
 import { cacheNovelForRoute } from '@/lib/novel-route-cache';
 import {
@@ -36,6 +40,14 @@ import {
   type NovelSearchSort,
   type NovelSearchTarget,
 } from '@/lib/pixiv';
+import {
+  clearRecentSearchHistory,
+  deleteSearchHistoryItem,
+  listSearchHistory,
+  recordSearchHistory,
+  setSearchHistoryPinned,
+  type SearchHistoryItem,
+} from '@/lib/search-history-db';
 import { type AppColors, type ThemeMode, useAppTheme } from '@/theme';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
@@ -157,8 +169,23 @@ export default function HomeScreen() {
     useState<NovelSearchSort>('date_desc');
   const [searchTarget, setSearchTarget] =
     useState<NovelSearchTarget>('keyword');
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
+  const [readingStatuses, setReadingStatuses] = useState<
+    Record<number, NovelReadingStatus>
+  >({});
   const persistRefreshToken = useCallback(async (refreshToken: string) => {
     await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
+  }, []);
+
+  const reloadSearchHistory = useCallback(async () => {
+    setSearchHistory(await listSearchHistory());
+  }, []);
+
+  const reloadReadingStatuses = useCallback(async (novels: PixivNovelItem[]) => {
+    const statusMap = await getNovelReadingStatuses(
+      novels.map((novel) => novel.id),
+    );
+    setReadingStatuses(Object.fromEntries(statusMap));
   }, []);
 
   const updateFeed = useCallback(
@@ -285,10 +312,22 @@ export default function HomeScreen() {
         }
 
         await persistRefreshToken(result.refreshToken);
-        updateFeed(tab, (current) => ({
-          novels: append
-            ? mergeNovels(current.novels, result.novels)
-            : result.novels,
+
+        if (tab === 'search' && !append && searchRequest) {
+          await recordSearchHistory(
+            searchRequest.word,
+            searchRequest.sort,
+            searchRequest.target,
+          );
+          await reloadSearchHistory();
+        }
+
+        const nextNovels = append
+          ? mergeNovels(feedsRef.current[tab].novels, result.novels)
+          : result.novels;
+
+        updateFeed(tab, () => ({
+          novels: nextNovels,
           nextUrl:
             append && result.nextUrl === nextUrl ? null : result.nextUrl,
           hasLoaded: true,
@@ -297,6 +336,7 @@ export default function HomeScreen() {
           error: null,
           loadMoreError: null,
         }));
+        void reloadReadingStatuses(nextNovels);
       } catch (error) {
         if (feedRequestVersionRef.current[tab] !== requestVersion) {
           return;
@@ -318,6 +358,8 @@ export default function HomeScreen() {
     [
       bookmarkVisibility,
       persistRefreshToken,
+      reloadReadingStatuses,
+      reloadSearchHistory,
       rankingMode,
       searchSort,
       searchTarget,
@@ -394,6 +436,7 @@ export default function HomeScreen() {
           error: null,
           loadMoreError: null,
         }));
+        void reloadReadingStatuses(recommended.novels);
       } catch (error) {
         disconnectPixiv();
 
@@ -415,7 +458,7 @@ export default function HomeScreen() {
         setIsConnecting(false);
         setIsBooting(false);
       }
-    }, [persistRefreshToken, updateFeed],
+    }, [persistRefreshToken, reloadReadingStatuses, updateFeed],
   );
 
   useEffect(() => {
@@ -469,6 +512,7 @@ export default function HomeScreen() {
     for (const tab of Object.keys(feedRequestVersionRef.current) as AppTab[]) {
       feedRequestVersionRef.current[tab] += 1;
     }
+    setReadingStatuses({});
     setFeeds(resetFeeds);
   }
 
@@ -502,6 +546,34 @@ export default function HomeScreen() {
     });
   }
 
+  function runSearchHistoryItem(item: SearchHistoryItem) {
+    setActiveTab('search');
+    setSearchWord(item.word);
+    setSubmittedSearchWord(item.word);
+    setSearchSort(item.sort);
+    setSearchTarget(item.target);
+    void requestFeed('search', {
+      searchWord: item.word,
+      searchSort: item.sort,
+      searchTarget: item.target,
+    });
+  }
+
+  async function toggleSearchHistoryPin(item: SearchHistoryItem) {
+    await setSearchHistoryPinned(item, !item.isPinned);
+    await reloadSearchHistory();
+  }
+
+  async function removeSearchHistoryItem(item: SearchHistoryItem) {
+    await deleteSearchHistoryItem(item);
+    await reloadSearchHistory();
+  }
+
+  async function clearSearchHistory() {
+    await clearRecentSearchHistory();
+    await reloadSearchHistory();
+  }
+
   const handleNovelChanged = useCallback((changedNovel: PixivNovelItem) => {
     setFeeds((current) => {
       const next = { ...current };
@@ -515,6 +587,7 @@ export default function HomeScreen() {
         };
       }
 
+      feedsRef.current = next;
       return next;
     });
   }, []);
@@ -522,6 +595,14 @@ export default function HomeScreen() {
   useEffect(() => subscribeNovelChanged(handleNovelChanged), [handleNovelChanged]);
 
   const activeFeed = feeds[activeTab];
+
+  useFocusEffect(
+    useCallback(() => {
+      void reloadSearchHistory();
+      void reloadReadingStatuses(feedsRef.current[activeTab].novels);
+    }, [activeTab, reloadReadingStatuses, reloadSearchHistory]),
+  );
+
   const headerTitle = useMemo(() => {
     switch (activeTab) {
       case 'recommended':
@@ -780,6 +861,13 @@ export default function HomeScreen() {
               setRankingMode(mode);
               void requestFeed('ranking', { rankingMode: mode });
             }}
+            onClearSearchHistory={() => {
+              void clearSearchHistory();
+            }}
+            onDeleteSearchHistoryItem={(item) => {
+              void removeSearchHistoryItem(item);
+            }}
+            onRunSearchHistoryItem={runSearchHistoryItem}
             onSearch={() => {
               submitSearch();
             }}
@@ -797,7 +885,11 @@ export default function HomeScreen() {
                 submitSearch(searchSort, target);
               }
             }}
+            onToggleSearchHistoryPin={(item) => {
+              void toggleSearchHistoryPin(item);
+            }}
             rankingMode={rankingMode}
+            searchHistory={searchHistory}
             searchSort={searchSort}
             searchTarget={searchTarget}
             searchWord={searchWord}
@@ -827,6 +919,7 @@ export default function HomeScreen() {
         renderItem={({ item, index }) => (
           <NovelCard
             novel={item}
+            readingStatus={readingStatuses[item.id]}
             onTagPress={openTagSearch}
             onPress={() => {
               cacheNovelForRoute(item);
@@ -909,14 +1002,19 @@ interface FeedControlsProps {
   activeTab: AppTab;
   bookmarkVisibility: BookmarkVisibility;
   rankingMode: NovelRanking;
+  searchHistory: SearchHistoryItem[];
   searchWord: string;
   searchSort: NovelSearchSort;
   searchTarget: NovelSearchTarget;
   setSearchWord: (value: string) => void;
   onBookmarkVisibilityChange: (value: BookmarkVisibility) => void;
+  onClearSearchHistory: () => void;
+  onDeleteSearchHistoryItem: (item: SearchHistoryItem) => void;
   onRankingModeChange: (value: NovelRanking) => void;
+  onRunSearchHistoryItem: (item: SearchHistoryItem) => void;
   onSearchSortChange: (value: NovelSearchSort) => void;
   onSearchTargetChange: (value: NovelSearchTarget) => void;
+  onToggleSearchHistoryPin: (item: SearchHistoryItem) => void;
   onSearch: () => void;
 }
 
@@ -924,18 +1022,25 @@ function FeedControls({
   activeTab,
   bookmarkVisibility,
   rankingMode,
+  searchHistory,
   searchWord,
   searchSort,
   searchTarget,
   setSearchWord,
   onBookmarkVisibilityChange,
+  onClearSearchHistory,
+  onDeleteSearchHistoryItem,
   onRankingModeChange,
+  onRunSearchHistoryItem,
   onSearchSortChange,
   onSearchTargetChange,
+  onToggleSearchHistoryPin,
   onSearch,
 }: FeedControlsProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const pinnedSearches = searchHistory.filter((item) => item.isPinned);
+  const recentSearches = searchHistory.filter((item) => !item.isPinned).slice(0, 8);
 
   if (activeTab === 'recommended') {
     return (
@@ -1022,6 +1127,58 @@ function FeedControls({
           <Text style={styles.searchButtonText}>検索</Text>
         </Pressable>
       </View>
+
+      {pinnedSearches.length > 0 ? (
+        <View style={styles.searchHistorySection}>
+          <Text style={styles.controlLabel}>保存した検索</Text>
+          <ScrollView
+            contentContainerStyle={styles.searchHistoryRow}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+          >
+            {pinnedSearches.map((item) => (
+              <SearchHistoryCard
+                item={item}
+                key={getSearchHistoryKey(item)}
+                onDelete={() => onDeleteSearchHistoryItem(item)}
+                onPress={() => onRunSearchHistoryItem(item)}
+                onTogglePin={() => onToggleSearchHistoryPin(item)}
+              />
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {recentSearches.length > 0 ? (
+        <View style={styles.searchHistorySection}>
+          <View style={styles.searchHistoryHeader}>
+            <Text style={styles.controlLabel}>最近の検索</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={onClearSearchHistory}
+              style={({ pressed }) => [pressed && styles.pressed]}
+            >
+              <Text style={styles.searchHistoryClearText}>履歴を消す</Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            contentContainerStyle={styles.searchHistoryRow}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+          >
+            {recentSearches.map((item) => (
+              <SearchHistoryCard
+                item={item}
+                key={getSearchHistoryKey(item)}
+                onDelete={() => onDeleteSearchHistoryItem(item)}
+                onPress={() => onRunSearchHistoryItem(item)}
+                onTogglePin={() => onToggleSearchHistoryPin(item)}
+              />
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
       <Text style={styles.controlLabel}>検索対象</Text>
       <ScrollView
         contentContainerStyle={styles.horizontalChips}
@@ -1061,6 +1218,86 @@ function FeedControls({
       )}
     </View>
   );
+}
+
+function SearchHistoryCard({
+  item,
+  onDelete,
+  onPress,
+  onTogglePin,
+}: {
+  item: SearchHistoryItem;
+  onDelete: () => void;
+  onPress: () => void;
+  onTogglePin: () => void;
+}) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const targetLabel =
+    SEARCH_TARGET_OPTIONS.find((option) => option.value === item.target)?.label ??
+    '検索';
+  const sortLabel =
+    SEARCH_SORT_OPTIONS.find((option) => option.value === item.sort)?.label ??
+    '新しい順';
+
+  return (
+    <View style={styles.searchHistoryCard}>
+      <Pressable
+        accessibilityLabel={`「${item.word}」を再検索`}
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.searchHistoryMain,
+          pressed && styles.pressed,
+        ]}
+      >
+        <Text numberOfLines={1} style={styles.searchHistoryWord}>
+          {item.word}
+        </Text>
+        <Text numberOfLines={1} style={styles.searchHistoryMeta}>
+          {targetLabel} ・ {sortLabel}
+          {item.useCount > 1 ? ` ・ ${item.useCount}回` : ''}
+        </Text>
+      </Pressable>
+      <View style={styles.searchHistoryActions}>
+        <Pressable
+          accessibilityLabel={
+            item.isPinned ? '保存した検索から外す' : 'この検索を保存'
+          }
+          accessibilityRole="button"
+          onPress={onTogglePin}
+          style={({ pressed }) => [
+            styles.searchHistoryActionButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text
+            style={[
+              styles.searchHistoryPinText,
+              item.isPinned && styles.searchHistoryPinTextActive,
+            ]}
+          >
+            {item.isPinned ? '★' : '☆'}
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel="この検索履歴を削除"
+          accessibilityRole="button"
+          onPress={onDelete}
+          style={({ pressed }) => [
+            styles.searchHistoryActionButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.searchHistoryDeleteText}>×</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function getSearchHistoryKey(item: SearchHistoryItem): string {
+  return `${item.word}\u0000${item.sort}\u0000${item.target}`;
 }
 
 function FilterChip({
@@ -1583,6 +1820,75 @@ function createStyles(colors: AppColors) {
     color: colors.onAccent,
     fontSize: 14,
     fontWeight: '900',
+  },
+  searchHistorySection: {
+    gap: 7,
+    paddingTop: 2,
+  },
+  searchHistoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  searchHistoryClearText: {
+    color: colors.danger,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  searchHistoryRow: {
+    gap: 9,
+    paddingRight: 14,
+  },
+  searchHistoryCard: {
+    width: 214,
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 14,
+    backgroundColor: colors.surface,
+  },
+  searchHistoryMain: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  searchHistoryWord: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  searchHistoryMeta: {
+    color: colors.textMuted,
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  searchHistoryActions: {
+    width: 42,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: colors.border,
+  },
+  searchHistoryActionButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchHistoryPinText: {
+    color: colors.textMuted,
+    fontSize: 17,
+  },
+  searchHistoryPinTextActive: {
+    color: colors.bookmark,
+  },
+  searchHistoryDeleteText: {
+    color: colors.danger,
+    fontSize: 19,
+    lineHeight: 22,
   },
   premiumNote: {
     color: colors.warning,
