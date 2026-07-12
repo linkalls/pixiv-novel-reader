@@ -19,6 +19,7 @@ describe('estimateCharactersRead', () => {
 
 describe('formatReadingDuration', () => {
   test('分と時間へ整形する', () => {
+    expect(formatReadingDuration(0)).toBe('0分');
     expect(formatReadingDuration(30_000)).toBe('1分未満');
     expect(formatReadingDuration(45 * 60_000)).toBe('45分');
     expect(formatReadingDuration(90 * 60_000)).toBe('1時間30分');

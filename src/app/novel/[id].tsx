@@ -1,7 +1,7 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import * as SecureStore from 'expo-secure-store';
 import { Image } from 'expo-image';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SymbolView } from 'expo-symbols';
 import * as SystemUI from 'expo-system-ui';
@@ -14,6 +14,7 @@ import {
 } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Linking,
   Modal,
   Platform,
@@ -85,6 +86,7 @@ import {
   createReaderMarkExcerpt,
   findReaderBlockAtOffset,
 } from '@/lib/reader-marks';
+import { ReadingActivityClock } from '@/lib/reading-activity';
 import {
   finishReadingSession,
   startReadingSession,
@@ -107,6 +109,7 @@ import { useAppTheme } from '@/theme';
 
 const READER_SETTINGS_KEY = 'pixiv-reader-settings-v1';
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
+const READING_SESSION_SAVE_INTERVAL_MS = 15_000;
 
 type ReaderThemeName = 'white' | 'gray' | 'black' | 'blue' | 'yellow';
 type ReaderFontSize = 'small' | 'normal' | 'large';
@@ -205,6 +208,7 @@ const LINE_HEIGHT_RATIOS: Record<ReaderLineSpacing, number> = {
 
 export default function NovelReaderScreen() {
   const router = useRouter();
+  const isScreenFocused = useIsFocused();
   const params = useLocalSearchParams<{
     bookmarked?: string | string[];
     id?: string | string[];
@@ -293,6 +297,16 @@ export default function NovelReaderScreen() {
     lineSpacing: 'wide',
     layout: 'horizontal',
   });
+  const isReadingSurfaceVisible =
+    isScreenFocused &&
+    !isSettingsVisible &&
+    !isSpeechVisible &&
+    !isMoreVisible &&
+    !isBookshelfVisible &&
+    !isMarksVisible &&
+    !isExclusionsVisible &&
+    !isNavigatorVisible &&
+    !isSeriesVisible;
   const fallbackStartedRef = useRef(false);
   const readerEndOffsetRef = useRef<number | null>(null);
   const novelBodyOffsetRef = useRef(0);
@@ -310,8 +324,14 @@ export default function NovelReaderScreen() {
   const hasRestoredPositionRef = useRef(false);
   const hasOfflineContentRef = useRef(false);
   const historyNovelIdRef = useRef<number | null>(null);
+  const appStateRef = useRef(AppState.currentState);
+  const isReaderFocusedRef = useRef(isReadingSurfaceVisible);
+  const readingActivityClockRef = useRef<ReadingActivityClock | null>(null);
   const readingSessionPromiseRef = useRef<Promise<number> | null>(null);
   const readingSessionNovelIdRef = useRef<number | null>(null);
+  const readingSessionSaveIntervalRef = useRef<
+    ReturnType<typeof setInterval> | null
+  >(null);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const palette = READER_THEMES[settings.theme];
@@ -387,6 +407,65 @@ export default function NovelReaderScreen() {
     },
     [],
   );
+
+  const markReadingActivity = useCallback(() => {
+    readingActivityClockRef.current?.markInteraction();
+  }, []);
+
+  const persistCurrentReadingSession = useCallback((finalize = false) => {
+    const readingSession = readingSessionPromiseRef.current;
+    const activityClock = readingActivityClockRef.current;
+    if (!readingSession || !activityClock) {
+      return;
+    }
+
+    const activeDurationMs = activityClock.getDuration();
+    const endProgress = currentProgressRef.current;
+    void readingSession
+      .then((sessionId) =>
+        finalize
+          ? finishReadingSession(sessionId, endProgress, activeDurationMs)
+          : updateReadingSession(sessionId, endProgress, activeDurationMs),
+      )
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    isReaderFocusedRef.current = isReadingSurfaceVisible;
+    const activityClock = readingActivityClockRef.current;
+    if (!activityClock) {
+      return;
+    }
+
+    const now = Date.now();
+    activityClock.setScreenFocused(isReadingSurfaceVisible, now);
+    if (isReadingSurfaceVisible) {
+      activityClock.markInteraction(now);
+    } else {
+      persistCurrentReadingSession();
+    }
+  }, [isReadingSurfaceVisible, persistCurrentReadingSession]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      appStateRef.current = nextState;
+      const activityClock = readingActivityClockRef.current;
+      if (!activityClock) {
+        return;
+      }
+
+      const now = Date.now();
+      const isActive = nextState === 'active';
+      activityClock.setAppActive(isActive, now);
+      if (isActive) {
+        activityClock.markInteraction(now);
+      } else {
+        persistCurrentReadingSession();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [persistCurrentReadingSession]);
 
   useEffect(() => {
     let isMounted = true;
@@ -805,16 +884,36 @@ export default function NovelReaderScreen() {
     }
 
     readingSessionNovelIdRef.current = detail.id;
+    readingActivityClockRef.current = new ReadingActivityClock({
+      appActive: appStateRef.current === 'active',
+      screenFocused: isReaderFocusedRef.current,
+    });
     readingSessionPromiseRef.current = startReadingSession(
       detail,
       currentProgressRef.current,
     );
-  }, [detail, readerContent]);
+
+    if (readingSessionSaveIntervalRef.current) {
+      clearInterval(readingSessionSaveIntervalRef.current);
+    }
+    readingSessionSaveIntervalRef.current = setInterval(() => {
+      if (
+        appStateRef.current === 'active' &&
+        isReaderFocusedRef.current
+      ) {
+        persistCurrentReadingSession();
+      }
+    }, READING_SESSION_SAVE_INTERVAL_MS);
+  }, [detail, persistCurrentReadingSession, readerContent]);
 
   useEffect(() => {
     return () => {
       if (progressSaveTimerRef.current) {
         clearTimeout(progressSaveTimerRef.current);
+      }
+      if (readingSessionSaveIntervalRef.current) {
+        clearInterval(readingSessionSaveIntervalRef.current);
+        readingSessionSaveIntervalRef.current = null;
       }
       if (statusTimerRef.current) {
         clearTimeout(statusTimerRef.current);
@@ -827,17 +926,12 @@ export default function NovelReaderScreen() {
         );
       }
 
-      const readingSession = readingSessionPromiseRef.current;
+      readingActivityClockRef.current?.setScreenFocused(false);
+      persistCurrentReadingSession(true);
+      readingActivityClockRef.current = null;
       readingSessionPromiseRef.current = null;
-      if (readingSession) {
-        void readingSession
-          .then((sessionId) =>
-            finishReadingSession(sessionId, currentProgressRef.current),
-          )
-          .catch(() => {});
-      }
     };
-  }, [isValidNovelId, novelId]);
+  }, [isValidNovelId, novelId, persistCurrentReadingSession]);
 
   function showStatus(message: string) {
     setStatusMessage(message);
@@ -1029,6 +1123,7 @@ export default function NovelReaderScreen() {
   }
 
   function scheduleProgressSave(progress: number, scrollOffset: number) {
+    markReadingActivity();
     currentProgressRef.current = progress;
     currentScrollOffsetRef.current = scrollOffset;
 
@@ -1043,14 +1138,7 @@ export default function NovelReaderScreen() {
         currentProgressRef.current,
         currentScrollOffsetRef.current,
       );
-      const readingSession = readingSessionPromiseRef.current;
-      if (readingSession) {
-        void readingSession
-          .then((sessionId) =>
-            updateReadingSession(sessionId, currentProgressRef.current),
-          )
-          .catch(() => {});
-      }
+      persistCurrentReadingSession();
     }, 800);
   }
 
@@ -1162,7 +1250,11 @@ export default function NovelReaderScreen() {
   }
 
   return (
-    <SafeAreaView edges={['top', 'bottom']} style={styles.safeArea}>
+    <SafeAreaView
+      edges={['top', 'bottom']}
+      onTouchStart={markReadingActivity}
+      style={styles.safeArea}
+    >
       <StatusBar style={palette.isDark ? 'light' : 'dark'} />
 
       {isOfflineChecked && isAjaxLoading && !readerContent && isValidNovelId && (
@@ -1255,6 +1347,7 @@ export default function NovelReaderScreen() {
                 : null
             }
             muted={palette.muted}
+            onActivity={markReadingActivity}
             onBlockChange={setVerticalBlockIndex}
             onProgress={(progress) => {
               setScrollProgress(progress);

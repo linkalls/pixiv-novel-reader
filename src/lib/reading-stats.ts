@@ -17,7 +17,11 @@ export function estimateCharactersRead(
 }
 
 export function formatReadingDuration(durationMs: number): string {
-  const totalMinutes = Math.max(0, Math.floor(durationMs / 60_000));
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return '0分';
+  }
+
+  const totalMinutes = Math.floor(durationMs / 60_000);
   if (totalMinutes < 1) {
     return '1分未満';
   }

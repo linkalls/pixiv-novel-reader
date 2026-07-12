@@ -200,7 +200,8 @@ async function restoreRows(
       continue;
     }
 
-    const columns = Object.keys(rawRow).filter((column) =>
+    const normalizedRow = normalizeBackupRow(table, rawRow);
+    const columns = Object.keys(normalizedRow).filter((column) =>
       TABLE_COLUMNS[table].includes(column),
     );
     if (columns.length === 0) {
@@ -208,7 +209,9 @@ async function restoreRows(
     }
 
     const placeholders = columns.map(() => '?').join(', ');
-    const values = columns.map((column) => normalizeSqlValue(rawRow[column]));
+    const values = columns.map((column) =>
+      normalizeSqlValue(normalizedRow[column]),
+    );
     await database.runAsync(
       `INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`,
       ...values,
@@ -216,6 +219,26 @@ async function restoreRows(
     count += 1;
   }
   return count;
+}
+
+function normalizeBackupRow(
+  table: BackupTableName,
+  row: Record<string, unknown>,
+): Record<string, unknown> {
+  if (table !== 'reading_sessions') {
+    return row;
+  }
+
+  const trackingVersion = Number(row.tracking_version);
+  if (Number.isFinite(trackingVersion) && trackingVersion >= 2) {
+    return row;
+  }
+
+  return {
+    ...row,
+    duration_ms: 0,
+    tracking_version: 1,
+  };
 }
 
 const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
@@ -266,6 +289,7 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'start_progress',
     'end_progress',
     'characters_read',
+    'tracking_version',
   ],
   search_history: [
     'word',

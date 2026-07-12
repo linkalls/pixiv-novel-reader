@@ -19,6 +19,7 @@ interface VerticalReaderViewProps {
   lineHeight: number;
   meta: string | null;
   muted: string;
+  onActivity: () => void;
   onBlockChange: (blockIndex: number) => void;
   onProgress: (progress: number, scrollOffset: number) => void;
   seriesTitle: string | null;
@@ -48,6 +49,7 @@ export const VerticalReaderView = forwardRef<
     lineHeight,
     meta,
     muted,
+    onActivity,
     onBlockChange,
     onProgress,
     seriesTitle,
@@ -122,6 +124,10 @@ export const VerticalReaderView = forwardRef<
       return;
     }
 
+    if (message.type === 'activity') {
+      onActivity();
+    }
+
     if (
       message.type === 'progress' &&
       typeof message.progress === 'number' &&
@@ -177,7 +183,10 @@ function buildVerticalReaderHtml({
   text,
   title,
   toolbar,
-}: Omit<VerticalReaderViewProps, 'onBlockChange' | 'onProgress'>): string {
+}: Omit<
+  VerticalReaderViewProps,
+  'onActivity' | 'onBlockChange' | 'onProgress'
+>): string {
   const renderedBlocks = blocks
     .map((block, index) => renderBlock(block, index, embeddedImages))
     .join('');
@@ -418,6 +427,9 @@ function buildVerticalReaderHtml({
     }
   };
 
+  viewport.addEventListener('pointerdown', function () {
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'activity' }));
+  }, { passive: true });
   viewport.addEventListener('scroll', schedulePost, { passive: true });
   window.addEventListener('resize', schedulePost);
   window.addEventListener('load', function () {

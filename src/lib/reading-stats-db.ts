@@ -8,6 +8,9 @@ import {
   type ReadingDayBucket,
 } from './reading-stats';
 
+const CURRENT_TRACKING_VERSION = 2;
+const MAX_SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+
 export interface ReadingStatistics {
   charactersRead: number;
   daily: ReadingDayBucket[];
@@ -47,34 +50,60 @@ let schemaPromise: Promise<void> | null = null;
 async function getStatsDatabase(): Promise<SQLiteDatabase> {
   const database = await getLibraryDatabase();
   if (!schemaPromise) {
-    schemaPromise = database
-      .execAsync(`
-        CREATE TABLE IF NOT EXISTS reading_sessions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          novel_id INTEGER NOT NULL,
-          title TEXT NOT NULL,
-          author_name TEXT NOT NULL,
-          text_length INTEGER NOT NULL DEFAULT 0,
-          started_at INTEGER NOT NULL,
-          ended_at INTEGER NOT NULL,
-          duration_ms INTEGER NOT NULL DEFAULT 0,
-          start_progress REAL NOT NULL DEFAULT 0,
-          end_progress REAL NOT NULL DEFAULT 0,
-          characters_read INTEGER NOT NULL DEFAULT 0
-        );
-
-        CREATE INDEX IF NOT EXISTS reading_sessions_ended_at_idx
-          ON reading_sessions(ended_at DESC);
-        CREATE INDEX IF NOT EXISTS reading_sessions_novel_idx
-          ON reading_sessions(novel_id, ended_at DESC);
-      `)
-      .catch((error) => {
-        schemaPromise = null;
-        throw error;
-      });
+    schemaPromise = initializeReadingStatsSchema(database).catch((error) => {
+      schemaPromise = null;
+      throw error;
+    });
   }
   await schemaPromise;
   return database;
+}
+
+async function initializeReadingStatsSchema(
+  database: SQLiteDatabase,
+): Promise<void> {
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS reading_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      novel_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      author_name TEXT NOT NULL,
+      text_length INTEGER NOT NULL DEFAULT 0,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      start_progress REAL NOT NULL DEFAULT 0,
+      end_progress REAL NOT NULL DEFAULT 0,
+      characters_read INTEGER NOT NULL DEFAULT 0,
+      tracking_version INTEGER NOT NULL DEFAULT ${CURRENT_TRACKING_VERSION}
+    );
+
+    CREATE INDEX IF NOT EXISTS reading_sessions_ended_at_idx
+      ON reading_sessions(ended_at DESC);
+    CREATE INDEX IF NOT EXISTS reading_sessions_novel_idx
+      ON reading_sessions(novel_id, ended_at DESC);
+  `);
+
+  const columns = await database.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(reading_sessions)',
+  );
+  if (!columns.some((column) => column.name === 'tracking_version')) {
+    await database.execAsync(`
+      ALTER TABLE reading_sessions
+      ADD COLUMN tracking_version INTEGER NOT NULL DEFAULT 1;
+    `);
+  }
+
+  // v1は画面を離れた時間やバックグラウンド滞在まで含む壁時計計測だった。
+  // 正確な実読書時間へ復元できないため、壊れた時間だけ破棄して作品数・文字数は残す。
+  await database.runAsync(
+    `
+      UPDATE reading_sessions
+      SET duration_ms = 0
+      WHERE tracking_version < ? AND duration_ms <> 0
+    `,
+    CURRENT_TRACKING_VERSION,
+  );
 }
 
 export async function ensureReadingStatsStorage(): Promise<void> {
@@ -92,8 +121,9 @@ export async function startReadingSession(
       INSERT INTO reading_sessions (
         novel_id, title, author_name, text_length,
         started_at, ended_at, duration_ms,
-        start_progress, end_progress, characters_read
-      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 0)
+        start_progress, end_progress, characters_read,
+        tracking_version
+      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?)
     `,
     detail.id,
     detail.title,
@@ -103,6 +133,7 @@ export async function startReadingSession(
     now,
     clampProgress(startProgress),
     clampProgress(startProgress),
+    CURRENT_TRACKING_VERSION,
   );
   return result.lastInsertRowId;
 }
@@ -110,21 +141,34 @@ export async function startReadingSession(
 export async function finishReadingSession(
   sessionId: number,
   endProgress: number,
+  activeDurationMs: number,
 ): Promise<void> {
-  await persistReadingSession(sessionId, endProgress, true);
+  await persistReadingSession(
+    sessionId,
+    endProgress,
+    activeDurationMs,
+    true,
+  );
 }
 
-/** 読書中の進捗を定期保存し、強制終了時にも統計を残せるようにする。 */
+/** 読書中の進捗と実読書時間を定期保存し、強制終了時にも統計を残す。 */
 export async function updateReadingSession(
   sessionId: number,
   endProgress: number,
+  activeDurationMs: number,
 ): Promise<void> {
-  await persistReadingSession(sessionId, endProgress, false);
+  await persistReadingSession(
+    sessionId,
+    endProgress,
+    activeDurationMs,
+    false,
+  );
 }
 
 async function persistReadingSession(
   sessionId: number,
   endProgress: number,
+  activeDurationMs: number,
   finalize: boolean,
 ): Promise<void> {
   const database = await getStatsDatabase();
@@ -137,14 +181,14 @@ async function persistReadingSession(
   }
 
   const endedAt = Date.now();
-  const durationMs = Math.max(
-    0,
-    Math.min(8 * 60 * 60 * 1000, endedAt - row.started_at),
-  );
+  const durationMs = sanitizeDuration(activeDurationMs);
 
   if (durationMs < 5_000) {
     if (finalize) {
-      await database.runAsync('DELETE FROM reading_sessions WHERE id = ?', sessionId);
+      await database.runAsync(
+        'DELETE FROM reading_sessions WHERE id = ?',
+        sessionId,
+      );
     }
     return;
   }
@@ -159,13 +203,19 @@ async function persistReadingSession(
   await database.runAsync(
     `
       UPDATE reading_sessions
-      SET ended_at = ?, duration_ms = ?, end_progress = ?, characters_read = ?
+      SET
+        ended_at = MAX(ended_at, ?),
+        duration_ms = MAX(duration_ms, ?),
+        end_progress = MAX(end_progress, ?),
+        characters_read = MAX(characters_read, ?),
+        tracking_version = ?
       WHERE id = ?
     `,
     endedAt,
     durationMs,
     normalizedEndProgress,
     charactersRead,
+    CURRENT_TRACKING_VERSION,
     sessionId,
   );
 }
@@ -185,10 +235,12 @@ export async function getReadingStatistics(days = 30): Promise<ReadingStatistics
       SELECT
         COALESCE(SUM(characters_read), 0) AS characters_read,
         COALESCE(SUM(duration_ms), 0) AS duration_ms,
-        COUNT(*) AS session_count,
+        COALESCE(SUM(CASE WHEN duration_ms > 0 THEN 1 ELSE 0 END), 0)
+          AS session_count,
         COUNT(DISTINCT novel_id) AS unique_novels
       FROM reading_sessions
-      WHERE ended_at >= ? AND duration_ms > 0
+      WHERE ended_at >= ?
+        AND (duration_ms > 0 OR characters_read > 0)
     `,
     cutoff,
   );
@@ -224,9 +276,11 @@ export async function getReadingStatistics(days = 30): Promise<ReadingStatistics
         date(ended_at / 1000, 'unixepoch', 'localtime') AS date,
         COALESCE(SUM(duration_ms), 0) AS duration_ms,
         COALESCE(SUM(characters_read), 0) AS characters_read,
-        COUNT(*) AS sessions
+        COALESCE(SUM(CASE WHEN duration_ms > 0 THEN 1 ELSE 0 END), 0)
+          AS sessions
       FROM reading_sessions
-      WHERE ended_at >= ? AND duration_ms > 0
+      WHERE ended_at >= ?
+        AND (duration_ms > 0 OR characters_read > 0)
       GROUP BY date
       ORDER BY date ASC
     `,
@@ -248,9 +302,11 @@ export async function getReadingStatistics(days = 30): Promise<ReadingStatistics
         MAX(author_name) AS author_name,
         COALESCE(SUM(duration_ms), 0) AS duration_ms,
         COALESCE(SUM(characters_read), 0) AS characters_read,
-        COUNT(*) AS sessions
+        COALESCE(SUM(CASE WHEN duration_ms > 0 THEN 1 ELSE 0 END), 0)
+          AS sessions
       FROM reading_sessions
-      WHERE ended_at >= ? AND duration_ms > 0
+      WHERE ended_at >= ?
+        AND (duration_ms > 0 OR characters_read > 0)
       GROUP BY novel_id
       ORDER BY duration_ms DESC, characters_read DESC
       LIMIT 5
@@ -295,4 +351,14 @@ function clampProgress(progress: number): number {
   return Number.isFinite(progress)
     ? Math.max(0, Math.min(1, progress))
     : 0;
+}
+
+function sanitizeDuration(durationMs: number): number {
+  if (!Number.isFinite(durationMs)) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    Math.min(MAX_SESSION_DURATION_MS, Math.round(durationMs)),
+  );
 }

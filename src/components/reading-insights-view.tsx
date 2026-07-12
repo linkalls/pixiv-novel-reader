@@ -220,7 +220,11 @@ export function ReadingInsightsView({
         <View style={styles.sectionHeading}>
           <Text style={styles.sectionTitle}>直近7日間</Text>
           <Text style={styles.sectionMeta}>
-            {statistics?.sessionCount ?? 0}セッション
+            {statistics?.daily.reduce(
+              (total, day) => total + day.sessions,
+              0,
+            ) ?? 0}
+            セッション
           </Text>
         </View>
         <View style={styles.chartCard}>
