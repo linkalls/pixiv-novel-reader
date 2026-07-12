@@ -3,6 +3,7 @@ import {
   NovelRankingMode,
   parseNextUrl,
   PixivClient,
+  SearchDuration,
   SearchSort,
   SearchTarget,
   type NovelSeriesDetail,
@@ -27,6 +28,22 @@ export type NovelSearchTarget =
   | 'partial_match_for_tags'
   | 'exact_match_for_tags'
   | 'title_and_caption';
+
+type PixivSearchDuration =
+  (typeof SearchDuration)[keyof typeof SearchDuration];
+type PixivSearchSort = (typeof SearchSort)[keyof typeof SearchSort];
+type PixivSearchTarget = (typeof SearchTarget)[keyof typeof SearchTarget];
+
+export interface NovelSearchCursor {
+  duration?: PixivSearchDuration;
+  endDate?: string;
+  offset?: number;
+  searchAiType?: 0 | 1;
+  searchTarget?: PixivSearchTarget;
+  sort?: PixivSearchSort;
+  startDate?: string;
+  word?: string;
+}
 
 export interface PixivSession {
   userId: number;
@@ -204,12 +221,19 @@ export async function searchNovels(
     throw new Error('検索語を入力してください');
   }
 
-  const cursor = nextUrl ? parseNextUrl(nextUrl) : {};
+  // next_urlにはoffsetだけでなく、検索語・検索対象・期間・日付範囲などが
+  // 含まれることがある。offsetだけ抜き出して再構築すると、2ページ目以降で
+  // 条件が欠落して結果が途中で途切れるため、返されたカーソルを優先する。
+  const cursor = nextUrl ? parseNovelSearchNextUrl(nextUrl) : {};
   const page = await performPixivRequest((client) =>
     client.novels.search({
-      word: normalizedWord,
-      searchTarget: toSearchTarget(target),
-      sort: toSearchSort(sort),
+      word: cursor.word ?? normalizedWord,
+      searchTarget: cursor.searchTarget ?? toSearchTarget(target),
+      sort: cursor.sort ?? toSearchSort(sort),
+      duration: cursor.duration,
+      startDate: cursor.startDate,
+      endDate: cursor.endDate,
+      searchAiType: cursor.searchAiType,
       offset: cursor.offset,
     }),
   );
@@ -659,6 +683,70 @@ function notifyRefreshToken(client: PixivClient): void {
   for (const listener of refreshTokenListeners) {
     void Promise.resolve(listener(refreshToken)).catch(() => {});
   }
+}
+
+export function parseNovelSearchNextUrl(nextUrl: string): NovelSearchCursor {
+  const url = new URL(nextUrl, 'https://app-api.pixiv.net');
+  const parameters = url.searchParams;
+  const cursor: NovelSearchCursor = {};
+  const word = parameters.get('word')?.trim();
+  const searchTarget = parameters.get('search_target');
+  const sort = parameters.get('sort');
+  const duration = parameters.get('duration');
+  const startDate = parameters.get('start_date')?.trim();
+  const endDate = parameters.get('end_date')?.trim();
+  const offset = parseOptionalNumber(parameters.get('offset'));
+  const searchAiType = parseOptionalNumber(parameters.get('search_ai_type'));
+
+  if (word) {
+    cursor.word = word;
+  }
+  if (isPixivSearchTarget(searchTarget)) {
+    cursor.searchTarget = searchTarget;
+  }
+  if (isPixivSearchSort(sort)) {
+    cursor.sort = sort;
+  }
+  if (isPixivSearchDuration(duration)) {
+    cursor.duration = duration;
+  }
+  if (startDate) {
+    cursor.startDate = startDate;
+  }
+  if (endDate) {
+    cursor.endDate = endDate;
+  }
+  if (offset !== undefined) {
+    cursor.offset = offset;
+  }
+  if (searchAiType === 0 || searchAiType === 1) {
+    cursor.searchAiType = searchAiType;
+  }
+
+  return cursor;
+}
+
+function parseOptionalNumber(value: string | null): number | undefined {
+  if (value === null || value.trim().length === 0) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isPixivSearchTarget(value: string | null): value is PixivSearchTarget {
+  return Object.values(SearchTarget).some((candidate) => candidate === value);
+}
+
+function isPixivSearchSort(value: string | null): value is PixivSearchSort {
+  return Object.values(SearchSort).some((candidate) => candidate === value);
+}
+
+function isPixivSearchDuration(
+  value: string | null,
+): value is PixivSearchDuration {
+  return Object.values(SearchDuration).some((candidate) => candidate === value);
 }
 
 function requireClient(): PixivClient {

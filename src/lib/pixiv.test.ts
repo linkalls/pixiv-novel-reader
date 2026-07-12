@@ -2,8 +2,36 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   parseNovelAjaxResponse,
+  parseNovelSearchNextUrl,
   parseNovelWebviewHtml,
 } from './pixiv';
+
+describe('parseNovelSearchNextUrl', () => {
+  test('検索ページの全カーソル条件を保持する', () => {
+    const cursor = parseNovelSearchNextUrl(
+      'https://app-api.pixiv.net/v1/search/novel?word=%E6%81%8B%E6%84%9B&search_target=exact_match_for_tags&sort=date_asc&duration=within_last_week&start_date=2026-07-01&end_date=2026-07-07&search_ai_type=0&offset=30',
+    );
+
+    expect(cursor).toEqual({
+      word: '恋愛',
+      searchTarget: 'exact_match_for_tags',
+      sort: 'date_asc',
+      duration: 'within_last_week',
+      startDate: '2026-07-01',
+      endDate: '2026-07-07',
+      searchAiType: 0,
+      offset: 30,
+    });
+  });
+
+  test('不正なカーソル値は引き継がない', () => {
+    const cursor = parseNovelSearchNextUrl(
+      '/v1/search/novel?word=%20&search_target=broken&sort=broken&duration=broken&search_ai_type=2&offset=not-a-number',
+    );
+
+    expect(cursor).toEqual({});
+  });
+});
 
 describe('parseNovelAjaxResponse', () => {
   test('Ajax内部APIの本文と埋め込み画像を読み取る', () => {

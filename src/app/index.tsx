@@ -47,6 +47,12 @@ type AppTab =
   | 'search'
   | 'library';
 
+interface SubmittedSearch {
+  sort: NovelSearchSort;
+  target: NovelSearchTarget;
+  word: string;
+}
+
 interface FeedState {
   novels: PixivNovelItem[];
   nextUrl: string | null;
@@ -54,6 +60,7 @@ interface FeedState {
   isLoading: boolean;
   isLoadingMore: boolean;
   error: string | null;
+  loadMoreError: string | null;
 }
 
 const EMPTY_FEED: FeedState = {
@@ -63,6 +70,7 @@ const EMPTY_FEED: FeedState = {
   isLoading: false,
   isLoadingMore: false,
   error: null,
+  loadMoreError: null,
 };
 
 const TAB_ITEMS: { key: AppTab; label: string; icon: string }[] = [
@@ -118,6 +126,16 @@ export default function HomeScreen() {
     search: { ...EMPTY_FEED },
     library: { ...EMPTY_FEED, hasLoaded: true },
   });
+  const feedsRef = useRef(feeds);
+  const submittedSearchRef = useRef<SubmittedSearch | null>(null);
+  const inFlightPagesRef = useRef(new Set<string>());
+  const feedRequestVersionRef = useRef<Record<AppTab, number>>({
+    recommended: 0,
+    bookmarks: 0,
+    ranking: 0,
+    search: 0,
+    library: 0,
+  });
 
   const connectingRef = useRef(false);
   const [isBooting, setIsBooting] = useState(true);
@@ -145,10 +163,14 @@ export default function HomeScreen() {
 
   const updateFeed = useCallback(
     (tab: AppTab, updater: (current: FeedState) => FeedState) => {
-      setFeeds((current) => ({
-        ...current,
-        [tab]: updater(current[tab]),
-      }));
+      setFeeds((current) => {
+        const nextFeeds = {
+          ...current,
+          [tab]: updater(current[tab]),
+        };
+        feedsRef.current = nextFeeds;
+        return nextFeeds;
+      });
     },
     [],
   );
@@ -170,27 +192,63 @@ export default function HomeScreen() {
       }
 
       const append = options?.append ?? false;
-      const currentFeed = feeds[tab];
+      const currentFeed = feedsRef.current[tab];
+      const nextUrl = append ? currentFeed.nextUrl : null;
+      const searchRequest: SubmittedSearch | null =
+        tab === 'search'
+          ? {
+              word:
+                options?.searchWord ??
+                submittedSearchRef.current?.word ??
+                submittedSearchWord,
+              sort:
+                options?.searchSort ??
+                submittedSearchRef.current?.sort ??
+                searchSort,
+              target:
+                options?.searchTarget ??
+                submittedSearchRef.current?.target ??
+                searchTarget,
+            }
+          : null;
 
-      if (append && (!currentFeed.nextUrl || currentFeed.isLoadingMore)) {
+      if (append && (!nextUrl || currentFeed.isLoadingMore)) {
         return;
       }
 
-      if (!append && currentFeed.isLoading) {
+      const requestKey = append
+        ? `${tab}:page:${nextUrl}`
+        : tab === 'search' && searchRequest
+          ? `${tab}:first:${searchRequest.word}:${searchRequest.sort}:${searchRequest.target}`
+          : `${tab}:first`;
+
+      if (inFlightPagesRef.current.has(requestKey)) {
         return;
+      }
+
+      inFlightPagesRef.current.add(requestKey);
+      const requestVersion = append
+        ? feedRequestVersionRef.current[tab]
+        : feedRequestVersionRef.current[tab] + 1;
+
+      if (!append) {
+        feedRequestVersionRef.current[tab] = requestVersion;
+        if (searchRequest) {
+          submittedSearchRef.current = searchRequest;
+        }
       }
 
       updateFeed(tab, (current) => ({
         ...current,
         isLoading: !append,
         isLoadingMore: append,
-        error: null,
+        error: append ? current.error : null,
+        loadMoreError: null,
         ...(append ? {} : { novels: [], nextUrl: null }),
       }));
 
       try {
         let result: NovelPageResult;
-        const nextUrl = append ? currentFeed.nextUrl : null;
 
         switch (tab) {
           case 'recommended':
@@ -209,15 +267,21 @@ export default function HomeScreen() {
             );
             break;
           case 'search': {
-            const word = options?.searchWord ?? submittedSearchWord;
+            if (!searchRequest) {
+              throw new Error('検索条件を読み取れませんでした');
+            }
             result = await searchNovels(
-              word,
-              options?.searchSort ?? searchSort,
-              options?.searchTarget ?? searchTarget,
+              searchRequest.word,
+              searchRequest.sort,
+              searchRequest.target,
               nextUrl,
             );
             break;
           }
+        }
+
+        if (feedRequestVersionRef.current[tab] !== requestVersion) {
+          return;
         }
 
         await persistRefreshToken(result.refreshToken);
@@ -225,25 +289,34 @@ export default function HomeScreen() {
           novels: append
             ? mergeNovels(current.novels, result.novels)
             : result.novels,
-          nextUrl: result.nextUrl,
+          nextUrl:
+            append && result.nextUrl === nextUrl ? null : result.nextUrl,
           hasLoaded: true,
           isLoading: false,
           isLoadingMore: false,
           error: null,
+          loadMoreError: null,
         }));
       } catch (error) {
+        if (feedRequestVersionRef.current[tab] !== requestVersion) {
+          return;
+        }
+
+        const message = toErrorMessage(error);
         updateFeed(tab, (current) => ({
           ...current,
           hasLoaded: true,
           isLoading: false,
           isLoadingMore: false,
-          error: toErrorMessage(error),
+          error: append ? current.error : message,
+          loadMoreError: append ? message : null,
         }));
+      } finally {
+        inFlightPagesRef.current.delete(requestKey);
       }
     },
     [
       bookmarkVisibility,
-      feeds,
       persistRefreshToken,
       rankingMode,
       searchSort,
@@ -319,6 +392,7 @@ export default function HomeScreen() {
           isLoading: false,
           isLoadingMore: false,
           error: null,
+          loadMoreError: null,
         }));
       } catch (error) {
         disconnectPixiv();
@@ -382,13 +456,20 @@ export default function HomeScreen() {
     setIsAuthenticated(false);
     setUserId(null);
     setAuthError(null);
-    setFeeds({
+    const resetFeeds: Record<AppTab, FeedState> = {
       recommended: { ...EMPTY_FEED },
       bookmarks: { ...EMPTY_FEED },
       ranking: { ...EMPTY_FEED },
       search: { ...EMPTY_FEED },
       library: { ...EMPTY_FEED, hasLoaded: true },
-    });
+    };
+    feedsRef.current = resetFeeds;
+    submittedSearchRef.current = null;
+    inFlightPagesRef.current.clear();
+    for (const tab of Object.keys(feedRequestVersionRef.current) as AppTab[]) {
+      feedRequestVersionRef.current[tab] += 1;
+    }
+    setFeeds(resetFeeds);
   }
 
   function selectTab(tab: AppTab) {
@@ -676,8 +757,10 @@ export default function HomeScreen() {
         }
         ListFooterComponent={
           <FeedFooter
+            error={activeFeed.loadMoreError}
             hasMore={Boolean(activeFeed.nextUrl)}
             isLoadingMore={activeFeed.isLoadingMore}
+            loadedCount={activeFeed.novels.length}
             onLoadMore={() => {
               void requestFeed(activeTab, { append: true });
             }}
@@ -726,7 +809,7 @@ export default function HomeScreen() {
             void requestFeed(activeTab, { append: true });
           }
         }}
-        onEndReachedThreshold={0.35}
+        onEndReachedThreshold={0.7}
         refreshControl={
           <RefreshControl
             colors={[colors.accent]}
@@ -1073,12 +1156,16 @@ function EmptyFeed({
 }
 
 function FeedFooter({
+  error,
   hasMore,
   isLoadingMore,
+  loadedCount,
   onLoadMore,
 }: {
+  error: string | null;
   hasMore: boolean;
   isLoadingMore: boolean;
+  loadedCount: number;
   onLoadMore: () => void;
 }) {
   const { colors } = useAppTheme();
@@ -1088,26 +1175,55 @@ function FeedFooter({
     return (
       <View style={styles.footerLoading}>
         <ActivityIndicator color={colors.accent} />
-        <Text style={styles.footerText}>続きを読み込み中…</Text>
+        <Text style={styles.footerText}>
+          続きを読み込み中…（{loadedCount}件表示中）
+        </Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.loadMoreErrorBox}>
+        <Text style={styles.loadMoreErrorText}>{error}</Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={onLoadMore}
+          style={({ pressed }) => [
+            styles.loadMoreButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.loadMoreText}>続きの取得をやり直す</Text>
+        </Pressable>
       </View>
     );
   }
 
   if (!hasMore) {
-    return <View style={styles.footerSpace} />;
+    return loadedCount > 0 ? (
+      <View style={styles.footerComplete}>
+        <Text style={styles.footerText}>{loadedCount}件を読み込みました</Text>
+      </View>
+    ) : (
+      <View style={styles.footerSpace} />
+    );
   }
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      onPress={onLoadMore}
-      style={({ pressed }) => [
-        styles.loadMoreButton,
-        pressed && styles.pressed,
-      ]}
-    >
-      <Text style={styles.loadMoreText}>もっと見る</Text>
-    </Pressable>
+    <View style={styles.loadMoreArea}>
+      <Text style={styles.footerText}>{loadedCount}件表示中</Text>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onLoadMore}
+        style={({ pressed }) => [
+          styles.loadMoreButton,
+          pressed && styles.pressed,
+        ]}
+      >
+        <Text style={styles.loadMoreText}>もっと見る</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -1529,9 +1645,32 @@ function createStyles(colors: AppColors) {
   footerSpace: {
     height: 24,
   },
+  footerComplete: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  loadMoreArea: {
+    gap: 8,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  loadMoreErrorBox: {
+    gap: 10,
+    marginTop: 16,
+    padding: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.danger,
+    borderRadius: 14,
+    backgroundColor: colors.surface,
+  },
+  loadMoreErrorText: {
+    color: colors.danger,
+    fontSize: 12,
+    lineHeight: 19,
+    textAlign: 'center',
+  },
   loadMoreButton: {
     alignItems: 'center',
-    marginTop: 15,
     paddingVertical: 14,
     borderWidth: 1,
     borderColor: colors.border,
