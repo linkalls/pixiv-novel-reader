@@ -7,7 +7,6 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
-  Linking,
   Modal,
   Platform,
   Pressable,
@@ -43,7 +42,6 @@ import {
   type NovelSearchSort,
   type NovelSearchTarget,
 } from '@/lib/pixiv';
-import { buildPixivUserUrl } from '@/lib/pixiv-links';
 import {
   clearRecentSearchHistory,
   deleteSearchHistoryItem,
@@ -392,17 +390,23 @@ export default function HomeScreen() {
     [requestFeed, searchSort],
   );
 
-  const openAuthorFromNovel = useCallback(async (novelId: number) => {
-    try {
-      const novel = await fetchNovelDetail(novelId);
-      await Linking.openURL(buildPixivUserUrl(novel.user.id));
-    } catch (error) {
-      Alert.alert(
-        'プロフィールを開けませんでした',
-        toErrorMessage(error),
-      );
-    }
-  }, []);
+  const openAuthorFromNovel = useCallback(
+    async (novelId: number) => {
+      try {
+        const novel = await fetchNovelDetail(novelId);
+        router.push({
+          pathname: '/user/[id]',
+          params: { id: String(novel.user.id) },
+        });
+      } catch (error) {
+        Alert.alert(
+          'プロフィールを開けませんでした',
+          toErrorMessage(error),
+        );
+      }
+    },
+    [router],
+  );
 
   useEffect(() => {
     if (
@@ -938,6 +942,12 @@ export default function HomeScreen() {
         renderItem={({ item, index }) => (
           <NovelCard
             novel={item}
+            onAuthorPress={() => {
+              router.push({
+                pathname: '/user/[id]',
+                params: { id: String(item.user.id) },
+              });
+            }}
             readingStatus={readingStatuses[item.id]}
             onTagPress={openTagSearch}
             onPress={() => {

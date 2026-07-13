@@ -745,7 +745,7 @@ function LibraryNovelCard({
             <Text numberOfLines={1} style={styles.author}>
               {item.authorName}
             </Text>
-            <Text style={styles.authorArrow}>↗</Text>
+            <Text style={styles.authorArrow}>›</Text>
           </Pressable>
           {item.tags.length > 0 ? (
             <View style={styles.libraryTagsRow}>
@@ -851,7 +851,7 @@ function ReaderMarkCard({
           <Text numberOfLines={1} style={styles.author}>
             {mark.authorName}
           </Text>
-          <Text style={styles.authorArrow}>↗</Text>
+          <Text style={styles.authorArrow}>›</Text>
         </Pressable>
         <Text numberOfLines={3} style={styles.markExcerpt}>{mark.excerpt}</Text>
         {mark.note ? (

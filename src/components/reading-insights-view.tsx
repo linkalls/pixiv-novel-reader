@@ -279,7 +279,7 @@ export function ReadingInsightsView({
                     <Text numberOfLines={1} style={styles.novelAuthor}>
                       {novel.authorName}
                     </Text>
-                    <Text style={styles.novelAuthorArrow}>↗</Text>
+                    <Text style={styles.novelAuthorArrow}>›</Text>
                   </Pressable>
                 </View>
                 <View style={styles.rankingValue}>

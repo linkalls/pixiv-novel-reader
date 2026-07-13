@@ -9,6 +9,10 @@ import {
   type NovelSeriesDetail,
   type PixivError,
   type PixivNovelItem,
+  type PixivUserItem,
+  type PixivUserProfile,
+  type PixivUserProfilePublicity,
+  type PixivUserProfileWorkspace,
   type Result,
 } from '@book000/pixivts';
 
@@ -60,6 +64,14 @@ export interface NovelSeriesResult {
   detail: NovelSeriesDetail;
   novels: PixivNovelItem[];
   refreshToken: string;
+}
+
+export interface UserProfileResult {
+  profile: PixivUserProfile;
+  profilePublicity: PixivUserProfilePublicity;
+  refreshToken: string;
+  user: PixivUserItem;
+  workspace: PixivUserProfileWorkspace;
 }
 
 export interface NovelReaderContent {
@@ -252,6 +264,49 @@ export async function fetchNovelDetail(
     client.novels.detail({ novelId }),
   );
   return detail.novel;
+}
+
+export async function fetchUserProfile(
+  userId: number,
+): Promise<UserProfileResult> {
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new Error('ユーザーIDが不正です');
+  }
+
+  const detail = await performPixivRequest((client) =>
+    client.users.detail({ userId }),
+  );
+
+  return {
+    profile: detail.profile,
+    profilePublicity: detail.profilePublicity,
+    refreshToken: requireClient().getRefreshToken(),
+    user: detail.user,
+    workspace: detail.workspace,
+  };
+}
+
+export async function fetchUserNovels(
+  userId: number,
+  nextUrl?: string | null,
+): Promise<NovelPageResult> {
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new Error('ユーザーIDが不正です');
+  }
+
+  const cursor = nextUrl ? parseNextUrl(nextUrl) : {};
+  const page = await performPixivRequest((client) =>
+    client.users.novels({
+      userId,
+      offset: cursor.offset,
+    }),
+  );
+
+  return {
+    novels: page.novels,
+    nextUrl: page.nextUrl,
+    refreshToken: requireClient().getRefreshToken(),
+  };
 }
 
 /** 現在の作品に近い小説をApp APIから取得する。 */

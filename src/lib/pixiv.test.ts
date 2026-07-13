@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+  fetchUserNovels,
+  fetchUserProfile,
   parseNovelAjaxResponse,
   parseNovelSearchNextUrl,
   parseNovelWebviewHtml,
@@ -97,5 +99,15 @@ describe('parseNovelWebviewHtml', () => {
     expect(content.id).toBe('9876');
     expect(content.title).toBe('フォールバック小説');
     expect(content.text).toBe(payload.text);
+  });
+});
+
+describe('user API validation', () => {
+  test('不正なユーザーIDではプロフィール取得を開始しない', async () => {
+    await expect(fetchUserProfile(0)).rejects.toThrow('ユーザーIDが不正です');
+  });
+
+  test('不正なユーザーIDでは小説一覧取得を開始しない', async () => {
+    await expect(fetchUserNovels(-1)).rejects.toThrow('ユーザーIDが不正です');
   });
 });

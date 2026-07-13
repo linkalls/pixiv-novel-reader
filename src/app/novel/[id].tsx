@@ -105,16 +105,11 @@ import {
   setNovelBookmark,
   type NovelReaderContent,
 } from '@/lib/pixiv';
-import { buildPixivUserUrl } from '@/lib/pixiv-links';
 import { useAppTheme } from '@/theme';
 
 const READER_SETTINGS_KEY = 'pixiv-reader-settings-v1';
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 const READING_SESSION_SAVE_INTERVAL_MS = 15_000;
-
-function openPixivUserProfile(userId: number): void {
-  void Linking.openURL(buildPixivUserUrl(userId));
-}
 
 type ReaderThemeName = 'white' | 'gray' | 'black' | 'blue' | 'yellow';
 type ReaderFontSize = 'small' | 'normal' | 'large';
@@ -214,6 +209,15 @@ const LINE_HEIGHT_RATIOS: Record<ReaderLineSpacing, number> = {
 export default function NovelReaderScreen() {
   const router = useRouter();
   const isScreenFocused = useIsFocused();
+  const openUserProfile = useCallback(
+    (userId: number) => {
+      router.push({
+        pathname: '/user/[id]',
+        params: { id: String(userId) },
+      });
+    },
+    [router],
+  );
   const params = useLocalSearchParams<{
     bookmarked?: string | string[];
     id?: string | string[];
@@ -1211,7 +1215,7 @@ export default function NovelReaderScreen() {
   async function openAuthorFromNovel(novelId: number) {
     try {
       const novel = await fetchNovelDetail(novelId);
-      openPixivUserProfile(novel.user.id);
+      openUserProfile(novel.user.id);
     } catch (error) {
       showStatus(`プロフィールを開けなかった: ${toErrorMessage(error)}`);
     }
@@ -1364,7 +1368,7 @@ export default function NovelReaderScreen() {
             onActivity={markReadingActivity}
             onAuthorPress={() => {
               if (detail) {
-                openPixivUserProfile(detail.user.id);
+                openUserProfile(detail.user.id);
               }
             }}
             onBlockChange={setVerticalBlockIndex}
@@ -1402,7 +1406,7 @@ export default function NovelReaderScreen() {
                   accessibilityLabel={`作者「${detail.user.name}」のプロフィールを開く`}
                   accessibilityRole="link"
                   onPress={() => {
-                    openPixivUserProfile(detail.user.id);
+                    openUserProfile(detail.user.id);
                   }}
                   style={({ pressed }) => [
                     styles.authorLink,
@@ -1410,7 +1414,7 @@ export default function NovelReaderScreen() {
                   ]}
                 >
                   <Text style={styles.authorName}>{detail.user.name}</Text>
-                  <Text style={styles.authorLinkArrow}>↗</Text>
+                  <Text style={styles.authorLinkArrow}>›</Text>
                 </Pressable>
                 <Text style={styles.workMeta}>
                   {detail.textLength.toLocaleString()}字　・　
@@ -1514,6 +1518,9 @@ export default function NovelReaderScreen() {
             loadingText="関連作品を検索中…"
             currentNovel={detail}
             novels={relatedItems}
+            onAuthorPress={(authorUserId) => {
+              openUserProfile(authorUserId);
+            }}
             onExclude={(relatedNovel) => {
               void hideRecommendation(relatedNovel);
             }}
@@ -1544,6 +1551,9 @@ export default function NovelReaderScreen() {
             loadingText="ディスカバリーを読み込み中…"
             currentNovel={detail}
             novels={discoveryItems}
+            onAuthorPress={(authorUserId) => {
+              openUserProfile(authorUserId);
+            }}
             onExclude={(discoveryNovel) => {
               void hideRecommendation(discoveryNovel);
             }}
@@ -1946,6 +1956,7 @@ interface RecommendationSectionProps {
   isLoading: boolean;
   loadingText: string;
   novels: PixivNovelItem[];
+  onAuthorPress: (userId: number) => void;
   onExclude: (novel: PixivNovelItem) => void;
   onNovelPress: (novel: PixivNovelItem) => void;
   onRetry: () => void;
@@ -1963,6 +1974,7 @@ function RecommendationSection({
   isLoading,
   loadingText,
   novels,
+  onAuthorPress,
   onExclude,
   onNovelPress,
   onRetry,
@@ -2048,7 +2060,7 @@ function RecommendationSection({
                   accessibilityRole="link"
                   onPress={(event) => {
                     event.stopPropagation();
-                    openPixivUserProfile(novel.user.id);
+                    onAuthorPress(novel.user.id);
                   }}
                   style={({ pressed }) => [
                     styles.relatedAuthorButton,
@@ -2058,7 +2070,7 @@ function RecommendationSection({
                   <Text numberOfLines={1} style={styles.relatedAuthor}>
                     {novel.user.name}
                   </Text>
-                  <Text style={styles.relatedAuthorArrow}>↗</Text>
+                  <Text style={styles.relatedAuthorArrow}>›</Text>
                 </Pressable>
                 <View style={styles.relatedMetaRow}>
                   <Text style={styles.relatedMeta}>

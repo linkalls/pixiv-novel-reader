@@ -153,7 +153,7 @@ export function RecommendationExclusionsModal({
                       <Text numberOfLines={1} style={styles.authorText}>
                         {item.authorName}
                       </Text>
-                      <Text style={styles.authorArrow}>↗</Text>
+                      <Text style={styles.authorArrow}>›</Text>
                     </Pressable>
                   </View>
                   <Pressable

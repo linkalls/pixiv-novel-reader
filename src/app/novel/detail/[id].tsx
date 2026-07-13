@@ -9,7 +9,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -37,7 +36,6 @@ import {
   getCachedNovelForRoute,
 } from '@/lib/novel-route-cache';
 import { fetchNovelDetail, setNovelBookmark } from '@/lib/pixiv';
-import { buildPixivUserUrl } from '@/lib/pixiv-links';
 import { type AppColors, useAppTheme } from '@/theme';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
@@ -374,7 +372,10 @@ export default function NovelDetailScreen() {
             accessibilityLabel={`作者「${detail.user.name}」のプロフィールを開く`}
             accessibilityRole="link"
             onPress={() => {
-              void Linking.openURL(buildPixivUserUrl(detail.user.id));
+              router.push({
+                pathname: '/user/[id]',
+                params: { id: String(detail.user.id) },
+              });
             }}
             style={({ pressed }) => [
               styles.authorButton,
