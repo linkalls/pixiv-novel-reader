@@ -187,14 +187,12 @@ export async function updateReadingProgress(
       UPDATE reading_history
       SET progress = ?,
           scroll_offset = ?,
-          is_finished = CASE WHEN ? >= 0.985 THEN 1 ELSE is_finished END,
-          last_read_at = ?
+          is_finished = CASE WHEN ? >= 0.985 THEN 1 ELSE is_finished END
       WHERE novel_id = ?
     `,
     normalizedProgress,
     Math.max(0, scrollOffset),
     normalizedProgress,
-    Date.now(),
     novelId,
   );
 }

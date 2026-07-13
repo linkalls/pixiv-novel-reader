@@ -211,6 +211,8 @@ export default function NovelReaderScreen() {
   const isScreenFocused = useIsFocused();
   const openUserProfile = useCallback(
     (userId: number) => {
+      // この読書画面へ「戻る」だけでは、同じ作品をもう一度開いた扱いにしない。
+      router.setParams({ history: 'restore' });
       router.push({
         pathname: '/user/[id]',
         params: { id: String(userId) },
@@ -220,12 +222,16 @@ export default function NovelReaderScreen() {
   );
   const params = useLocalSearchParams<{
     bookmarked?: string | string[];
+    history?: string | string[];
     id?: string | string[];
     resume?: string | string[];
     scrollOffset?: string | string[];
   }>();
   const { colors, isDark: isAppDark } = useAppTheme();
   const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const rawHistory = Array.isArray(params.history)
+    ? params.history[0]
+    : params.history;
   const rawResume = Array.isArray(params.resume)
     ? params.resume[0]
     : params.resume;
@@ -240,6 +246,7 @@ export default function NovelReaderScreen() {
   const novelId = Number(rawId);
   const isValidNovelId = Number.isInteger(novelId) && novelId > 0;
   const shouldResume = rawResume === '1';
+  const shouldRecordHistory = rawHistory !== 'restore';
   const routeBookmarkState = parseBookmarkRouteParam(params.bookmarked);
 
   const [detail, setDetail] = useState<PixivNovelItem | null>(null);
@@ -876,12 +883,16 @@ export default function NovelReaderScreen() {
     }
 
     historyNovelIdRef.current = detail.id;
+    if (!shouldRecordHistory) {
+      return;
+    }
+
     void recordNovelOpened(
       detail,
       currentProgressRef.current,
       currentScrollOffsetRef.current,
     );
-  }, [detail, readerContent]);
+  }, [detail, readerContent, shouldRecordHistory]);
 
   useEffect(() => {
     if (
@@ -1201,12 +1212,12 @@ export default function NovelReaderScreen() {
     requestAnimationFrame(() => jumpToBlock(match.blockIndex));
   }
 
-  function replaceReaderNovel(novel: PixivNovelItem) {
-    // 読書画面から別作品へ移るたびにreader routeを積むと、戻る操作で
-    // 読み終えた作品を一冊ずつ逆走してしまう。前の作品は読書履歴へ残るため、
-    // reader route自体は置き換え、戻る先は読書開始前の画面のまま維持する。
+  function pushReaderNovel(novel: PixivNovelItem) {
+    // 新しい作品は履歴スタックへ積み、戻ると前の作品へ戻れるようにする。
+    // ただし戻って表示された前の作品は、もう一度開いた履歴としては記録しない。
     cacheNovelForRoute(novel);
-    router.replace({
+    router.setParams({ history: 'restore' });
+    router.push({
       pathname: '/novel/[id]',
       params: buildReaderRouteParams(novel.id, {
         bookmarked: novel.isBookmarked,
@@ -1216,7 +1227,7 @@ export default function NovelReaderScreen() {
 
   function openSeriesNovel(novel: PixivNovelItem) {
     setIsSeriesVisible(false);
-    replaceReaderNovel(novel);
+    pushReaderNovel(novel);
   }
 
   async function openAuthorFromNovel(novelId: number) {
@@ -1532,7 +1543,7 @@ export default function NovelReaderScreen() {
               void hideRecommendation(relatedNovel);
             }}
             onNovelPress={(relatedNovel) => {
-              replaceReaderNovel(relatedNovel);
+              pushReaderNovel(relatedNovel);
             }}
             onRetry={() => {
               setIsRelatedLoading(true);
@@ -1560,7 +1571,7 @@ export default function NovelReaderScreen() {
               void hideRecommendation(discoveryNovel);
             }}
             onNovelPress={(discoveryNovel) => {
-              replaceReaderNovel(discoveryNovel);
+              pushReaderNovel(discoveryNovel);
             }}
             onRetry={() => {
               setIsDiscoveryLoading(true);
@@ -1769,6 +1780,7 @@ export default function NovelReaderScreen() {
             });
           }
 
+          router.setParams({ history: 'restore' });
           requestAnimationFrame(() => {
             // 読書メニューから開いた詳細は、必ず読書画面の上へ積む。
             // 詳細の戻る操作で一覧ではなく、元の読書位置へ戻れるようにする。
