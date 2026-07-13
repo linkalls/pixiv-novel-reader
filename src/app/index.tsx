@@ -4,8 +4,10 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -31,6 +33,7 @@ import {
   connectPixiv,
   disconnectPixiv,
   fetchBookmarkedNovels,
+  fetchNovelDetail,
   fetchNovelRanking,
   fetchRecommendedNovels,
   searchNovels,
@@ -40,6 +43,7 @@ import {
   type NovelSearchSort,
   type NovelSearchTarget,
 } from '@/lib/pixiv';
+import { buildPixivUserUrl } from '@/lib/pixiv-links';
 import {
   clearRecentSearchHistory,
   deleteSearchHistoryItem,
@@ -387,6 +391,18 @@ export default function HomeScreen() {
     },
     [requestFeed, searchSort],
   );
+
+  const openAuthorFromNovel = useCallback(async (novelId: number) => {
+    try {
+      const novel = await fetchNovelDetail(novelId);
+      await Linking.openURL(buildPixivUserUrl(novel.user.id));
+    } catch (error) {
+      Alert.alert(
+        'プロフィールを開けませんでした',
+        toErrorMessage(error),
+      );
+    }
+  }, []);
 
   useEffect(() => {
     if (
@@ -802,6 +818,9 @@ export default function HomeScreen() {
 
       {activeTab === 'library' ? (
         <LibraryView
+          onOpenAuthor={(novelId) => {
+            void openAuthorFromNovel(novelId);
+          }}
           onTagPress={openTagSearch}
           onOpenNovel={(novelId, resume, scrollOffset) => {
             router.push({

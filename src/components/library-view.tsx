@@ -46,6 +46,7 @@ type LibraryMode = 'history' | 'shelves' | 'marks' | 'offline' | 'stats';
 type ShelfEditorMode = 'create' | 'rename';
 
 interface LibraryViewProps {
+  onOpenAuthor: (novelId: number) => void;
   onOpenNovel: (
     novelId: number,
     resume: boolean,
@@ -68,6 +69,7 @@ const HISTORY_SORTS: { value: ReadingHistorySort; label: string }[] = [
 ];
 
 export function LibraryView({
+  onOpenAuthor,
   onOpenNovel,
   onTagPress,
 }: LibraryViewProps) {
@@ -362,6 +364,7 @@ export function LibraryView({
 
       {mode === 'stats' ? (
         <ReadingInsightsView
+          onOpenAuthor={onOpenAuthor}
           onDataRestored={() => {
             void loadItems();
           }}
@@ -390,6 +393,7 @@ export function LibraryView({
           renderItem={({ item: mark }) => (
             <ReaderMarkCard
               mark={mark}
+              onAuthor={() => onOpenAuthor(mark.novelId)}
               onDelete={() => void removeMark(mark.id)}
               onOpen={() =>
                 onOpenNovel(mark.novelId, false, mark.scrollOffset)
@@ -422,6 +426,7 @@ export function LibraryView({
             <LibraryNovelCard
               item={item}
               mode={mode}
+              onAuthor={() => onOpenAuthor(item.novelId)}
               onTagPress={onTagPress}
               onOpen={() => {
                 onOpenNovel(
@@ -677,12 +682,14 @@ function FilterChip({
 function LibraryNovelCard({
   item,
   mode,
+  onAuthor,
   onOpen,
   onRemove,
   onTagPress,
 }: {
   item: LibraryNovel;
   mode: LibraryMode;
+  onAuthor: () => void;
   onOpen: () => void;
   onRemove?: () => void;
   onTagPress: (tagName: string) => void;
@@ -723,7 +730,23 @@ function LibraryNovelCard({
               </View>
             ) : null}
           </View>
-          <Text numberOfLines={1} style={styles.author}>{item.authorName}</Text>
+          <Pressable
+            accessibilityLabel={`作者「${item.authorName}」のプロフィールを開く`}
+            accessibilityRole="link"
+            onPress={(event) => {
+              event.stopPropagation();
+              onAuthor();
+            }}
+            style={({ pressed }) => [
+              styles.authorButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text numberOfLines={1} style={styles.author}>
+              {item.authorName}
+            </Text>
+            <Text style={styles.authorArrow}>↗</Text>
+          </Pressable>
           {item.tags.length > 0 ? (
             <View style={styles.libraryTagsRow}>
               {item.tags.slice(0, 3).map((tagName) => (
@@ -790,10 +813,12 @@ function LibraryNovelCard({
 
 function ReaderMarkCard({
   mark,
+  onAuthor,
   onDelete,
   onOpen,
 }: {
   mark: ReaderMark;
+  onAuthor: () => void;
   onDelete: () => void;
   onOpen: () => void;
 }) {
@@ -811,7 +836,23 @@ function ReaderMarkCard({
           <Text style={styles.meta}>{formatRelativeTime(mark.updatedAt)}</Text>
         </View>
         <Text numberOfLines={1} style={styles.cardTitle}>{mark.title}</Text>
-        <Text numberOfLines={1} style={styles.author}>{mark.authorName}</Text>
+        <Pressable
+          accessibilityLabel={`作者「${mark.authorName}」のプロフィールを開く`}
+          accessibilityRole="link"
+          onPress={(event) => {
+            event.stopPropagation();
+            onAuthor();
+          }}
+          style={({ pressed }) => [
+            styles.authorButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text numberOfLines={1} style={styles.author}>
+            {mark.authorName}
+          </Text>
+          <Text style={styles.authorArrow}>↗</Text>
+        </Pressable>
         <Text numberOfLines={3} style={styles.markExcerpt}>{mark.excerpt}</Text>
         {mark.note ? (
           <Text numberOfLines={3} style={styles.markNote}>📝 {mark.note}</Text>
@@ -1032,7 +1073,25 @@ function createStyles(colors: AppColors) {
       fontWeight: '900',
       letterSpacing: 0.5,
     },
-    author: { color: colors.textSecondary, fontSize: 12, fontWeight: '600' },
+    authorButton: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      maxWidth: '100%',
+      paddingVertical: 1,
+    },
+    author: {
+      flexShrink: 1,
+      color: colors.accentStrong,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    authorArrow: {
+      color: colors.accentStrong,
+      fontSize: 10,
+      fontWeight: '900',
+    },
     libraryTagsRow: {
       flexDirection: 'row',
       flexWrap: 'wrap',

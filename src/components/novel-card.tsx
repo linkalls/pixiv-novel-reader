@@ -1,9 +1,10 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import { Image } from 'expo-image';
 import { useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { NovelReadingStatus } from '@/lib/library-db';
+import { buildPixivUserUrl } from '@/lib/pixiv-links';
 import { type AppColors, useAppTheme } from '@/theme';
 
 interface NovelCardProps {
@@ -60,9 +61,24 @@ export function NovelCard({
           </Text>
         </View>
 
-        <Text numberOfLines={1} style={styles.author}>
-          {novel.user.name}
-        </Text>
+        <Pressable
+          accessibilityLabel={`作者「${novel.user.name}」のプロフィールを開く`}
+          accessibilityRole="link"
+          hitSlop={6}
+          onPress={(event) => {
+            event.stopPropagation();
+            void Linking.openURL(buildPixivUserUrl(novel.user.id));
+          }}
+          style={({ pressed }) => [
+            styles.authorButton,
+            pressed && styles.authorButtonPressed,
+          ]}
+        >
+          <Text numberOfLines={1} style={styles.author}>
+            {novel.user.name}
+          </Text>
+          <Text style={styles.authorArrow}>↗</Text>
+        </Pressable>
 
         {readingStatus ? (
           <View style={styles.readingStatusRow}>
@@ -199,10 +215,27 @@ function createStyles(colors: AppColors) {
       fontSize: 18,
       lineHeight: 22,
     },
+    authorButton: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      maxWidth: '100%',
+      paddingVertical: 1,
+    },
+    authorButtonPressed: {
+      opacity: 0.55,
+    },
     author: {
-      color: colors.textSecondary,
+      flexShrink: 1,
+      color: colors.accentStrong,
       fontSize: 13,
-      fontWeight: '600',
+      fontWeight: '700',
+    },
+    authorArrow: {
+      color: colors.accentStrong,
+      fontSize: 11,
+      fontWeight: '900',
     },
     readingStatusRow: {
       flexDirection: 'row',

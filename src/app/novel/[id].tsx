@@ -105,11 +105,16 @@ import {
   setNovelBookmark,
   type NovelReaderContent,
 } from '@/lib/pixiv';
+import { buildPixivUserUrl } from '@/lib/pixiv-links';
 import { useAppTheme } from '@/theme';
 
 const READER_SETTINGS_KEY = 'pixiv-reader-settings-v1';
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 const READING_SESSION_SAVE_INTERVAL_MS = 15_000;
+
+function openPixivUserProfile(userId: number): void {
+  void Linking.openURL(buildPixivUserUrl(userId));
+}
 
 type ReaderThemeName = 'white' | 'gray' | 'black' | 'blue' | 'yellow';
 type ReaderFontSize = 'small' | 'normal' | 'large';
@@ -1203,6 +1208,15 @@ export default function NovelReaderScreen() {
     });
   }
 
+  async function openAuthorFromNovel(novelId: number) {
+    try {
+      const novel = await fetchNovelDetail(novelId);
+      openPixivUserProfile(novel.user.id);
+    } catch (error) {
+      showStatus(`プロフィールを開けなかった: ${toErrorMessage(error)}`);
+    }
+  }
+
   async function hideRecommendation(novel: PixivNovelItem) {
     try {
       await excludeRecommendation(novel);
@@ -1348,6 +1362,11 @@ export default function NovelReaderScreen() {
             }
             muted={palette.muted}
             onActivity={markReadingActivity}
+            onAuthorPress={() => {
+              if (detail) {
+                openPixivUserProfile(detail.user.id);
+              }
+            }}
             onBlockChange={setVerticalBlockIndex}
             onProgress={(progress) => {
               setScrollProgress(progress);
@@ -1379,7 +1398,20 @@ export default function NovelReaderScreen() {
             </Text>
             {detail ? (
               <>
-                <Text style={styles.authorName}>{detail.user.name}</Text>
+                <Pressable
+                  accessibilityLabel={`作者「${detail.user.name}」のプロフィールを開く`}
+                  accessibilityRole="link"
+                  onPress={() => {
+                    openPixivUserProfile(detail.user.id);
+                  }}
+                  style={({ pressed }) => [
+                    styles.authorLink,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.authorName}>{detail.user.name}</Text>
+                  <Text style={styles.authorLinkArrow}>↗</Text>
+                </Pressable>
                 <Text style={styles.workMeta}>
                   {detail.textLength.toLocaleString()}字　・　
                   {new Date(detail.createDate).toLocaleDateString('ja-JP')}
@@ -1656,6 +1688,9 @@ export default function NovelReaderScreen() {
         border={palette.border}
         muted={palette.muted}
         onClose={() => setIsExclusionsVisible(false)}
+        onOpenAuthor={(excludedNovelId) => {
+          void openAuthorFromNovel(excludedNovelId);
+        }}
         onRestored={(restoredNovelId) => {
           setExcludedNovelIds((current) => {
             const next = new Set(current);
@@ -2008,9 +2043,23 @@ function RecommendationSection({
                 <Text numberOfLines={2} style={styles.relatedCardTitle}>
                   {novel.title}
                 </Text>
-                <Text numberOfLines={1} style={styles.relatedAuthor}>
-                  {novel.user.name}
-                </Text>
+                <Pressable
+                  accessibilityLabel={`作者「${novel.user.name}」のプロフィールを開く`}
+                  accessibilityRole="link"
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    openPixivUserProfile(novel.user.id);
+                  }}
+                  style={({ pressed }) => [
+                    styles.relatedAuthorButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text numberOfLines={1} style={styles.relatedAuthor}>
+                    {novel.user.name}
+                  </Text>
+                  <Text style={styles.relatedAuthorArrow}>↗</Text>
+                </Pressable>
                 <View style={styles.relatedMetaRow}>
                   <Text style={styles.relatedMeta}>
                     {novel.textLength.toLocaleString()}字
@@ -2738,10 +2787,22 @@ function createStyles(palette: ReaderPalette) {
       fontWeight: '700',
       lineHeight: 35,
     },
+    authorLink: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingVertical: 2,
+    },
     authorName: {
-      color: palette.text,
+      color: palette.accent,
       fontSize: 14,
-      fontWeight: '600',
+      fontWeight: '700',
+    },
+    authorLinkArrow: {
+      color: palette.accent,
+      fontSize: 12,
+      fontWeight: '900',
     },
     workMeta: {
       color: palette.muted,
@@ -3042,9 +3103,24 @@ function createStyles(palette: ReaderPalette) {
       fontWeight: '800',
       lineHeight: 20,
     },
+    relatedAuthorButton: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      maxWidth: '100%',
+      paddingVertical: 1,
+    },
     relatedAuthor: {
-      color: palette.muted,
+      flexShrink: 1,
+      color: palette.accent,
       fontSize: 11,
+      fontWeight: '700',
+    },
+    relatedAuthorArrow: {
+      color: palette.accent,
+      fontSize: 10,
+      fontWeight: '900',
     },
     relatedMetaRow: {
       flexDirection: 'row',

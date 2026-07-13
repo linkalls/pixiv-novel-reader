@@ -9,6 +9,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -36,6 +37,7 @@ import {
   getCachedNovelForRoute,
 } from '@/lib/novel-route-cache';
 import { fetchNovelDetail, setNovelBookmark } from '@/lib/pixiv';
+import { buildPixivUserUrl } from '@/lib/pixiv-links';
 import { type AppColors, useAppTheme } from '@/theme';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
@@ -368,7 +370,36 @@ export default function NovelDetailScreen() {
 
         <View style={styles.titleBlock}>
           <Text style={styles.title}>{detail.title}</Text>
-          <Text style={styles.author}>{detail.user.name}</Text>
+          <Pressable
+            accessibilityLabel={`作者「${detail.user.name}」のプロフィールを開く`}
+            accessibilityRole="link"
+            onPress={() => {
+              void Linking.openURL(buildPixivUserUrl(detail.user.id));
+            }}
+            style={({ pressed }) => [
+              styles.authorButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Image
+              contentFit="cover"
+              source={{
+                uri: detail.user.profileImageUrls.medium,
+                headers: { Referer: 'https://app-api.pixiv.net/' },
+              }}
+              style={styles.authorAvatar}
+              transition={160}
+            />
+            <View style={styles.authorText}>
+              <Text numberOfLines={1} style={styles.author}>
+                {detail.user.name}
+              </Text>
+              <Text numberOfLines={1} style={styles.authorAccount}>
+                @{detail.user.account}
+              </Text>
+            </View>
+            <Text style={styles.authorArrow}>›</Text>
+          </Pressable>
           <View style={styles.metaRow}>
             <Text style={styles.meta}>
               {detail.textLength.toLocaleString()}字
@@ -634,9 +665,42 @@ function createStyles(colors: AppColors) {
       fontWeight: '900',
       lineHeight: 34,
     },
+    authorButton: {
+      minHeight: 54,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 11,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 15,
+      backgroundColor: colors.surface,
+    },
+    authorAvatar: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: colors.surfaceAlt,
+    },
+    authorText: {
+      flex: 1,
+      minWidth: 0,
+      gap: 2,
+    },
     author: {
-      color: colors.textSecondary,
+      color: colors.text,
       fontSize: 15,
+      fontWeight: '800',
+    },
+    authorAccount: {
+      color: colors.textMuted,
+      fontSize: 11,
+      fontWeight: '600',
+    },
+    authorArrow: {
+      color: colors.accent,
+      fontSize: 24,
       fontWeight: '700',
     },
     metaRow: {

@@ -21,6 +21,7 @@ interface RecommendationExclusionsModalProps {
   border: string;
   muted: string;
   onClose: () => void;
+  onOpenAuthor: (novelId: number) => void;
   onRestored: (novelId: number) => void;
   overlay: string;
   text: string;
@@ -33,6 +34,7 @@ export function RecommendationExclusionsModal({
   border,
   muted,
   onClose,
+  onOpenAuthor,
   onRestored,
   overlay,
   text,
@@ -139,7 +141,20 @@ export function RecommendationExclusionsModal({
                 <View key={item.novelId} style={styles.row}>
                   <View style={styles.rowBody}>
                     <Text numberOfLines={2} style={styles.rowTitle}>{item.title}</Text>
-                    <Text numberOfLines={1} style={styles.muted}>{item.authorName}</Text>
+                    <Pressable
+                      accessibilityLabel={`作者「${item.authorName}」のプロフィールを開く`}
+                      accessibilityRole="link"
+                      onPress={() => onOpenAuthor(item.novelId)}
+                      style={({ pressed }) => [
+                        styles.authorButton,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text numberOfLines={1} style={styles.authorText}>
+                        {item.authorName}
+                      </Text>
+                      <Text style={styles.authorArrow}>↗</Text>
+                    </Pressable>
                   </View>
                   <Pressable
                     accessibilityRole="button"
@@ -197,6 +212,25 @@ function createStyles(colors: {
     row: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
     rowBody: { flex: 1, gap: 4 },
     rowTitle: { color: colors.text, fontSize: 13, fontWeight: '800', lineHeight: 19 },
+    authorButton: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      maxWidth: '100%',
+    },
+    authorText: {
+      flexShrink: 1,
+      color: colors.accent,
+      fontSize: 11,
+      fontWeight: '700',
+      lineHeight: 17,
+    },
+    authorArrow: {
+      color: colors.accent,
+      fontSize: 10,
+      fontWeight: '900',
+    },
     restoreButton: { minWidth: 62, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: colors.accent },
     restoreText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
     pressed: { opacity: 0.65 },

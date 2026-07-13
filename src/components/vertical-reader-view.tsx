@@ -20,6 +20,7 @@ interface VerticalReaderViewProps {
   meta: string | null;
   muted: string;
   onActivity: () => void;
+  onAuthorPress: () => void;
   onBlockChange: (blockIndex: number) => void;
   onProgress: (progress: number, scrollOffset: number) => void;
   seriesTitle: string | null;
@@ -50,6 +51,7 @@ export const VerticalReaderView = forwardRef<
     meta,
     muted,
     onActivity,
+    onAuthorPress,
     onBlockChange,
     onProgress,
     seriesTitle,
@@ -128,6 +130,10 @@ export const VerticalReaderView = forwardRef<
       onActivity();
     }
 
+    if (message.type === 'author') {
+      onAuthorPress();
+    }
+
     if (
       message.type === 'progress' &&
       typeof message.progress === 'number' &&
@@ -185,7 +191,7 @@ function buildVerticalReaderHtml({
   toolbar,
 }: Omit<
   VerticalReaderViewProps,
-  'onActivity' | 'onBlockChange' | 'onProgress'
+  'onActivity' | 'onAuthorPress' | 'onBlockChange' | 'onProgress'
 >): string {
   const renderedBlocks = blocks
     .map((block, index) => renderBlock(block, index, embeddedImages))
@@ -253,6 +259,20 @@ function buildVerticalReaderHtml({
     font-size: 12px;
     margin-left: 8px;
   }
+  .author {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-weight: 700;
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .author:active { opacity: 0.55; }
   #body {
     font-size: ${Math.max(12, fontSize)}px;
     line-height: ${Math.max(fontSize + 4, lineHeight)}px;
@@ -311,7 +331,7 @@ function buildVerticalReaderHtml({
     <header id="header">
       ${seriesTitle ? `<div class="series">${escapeHtml(seriesTitle)}</div>` : ''}
       <h1 class="title">${escapeHtml(title)}</h1>
-      ${authorName ? `<div class="author">${escapeHtml(authorName)}</div>` : ''}
+      ${authorName ? `<button aria-label="作者プロフィールを開く" class="author" id="author" type="button">${escapeHtml(authorName)}</button>` : ''}
       ${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ''}
     </header>
     <section id="body">${renderedBlocks}</section>
@@ -321,6 +341,7 @@ function buildVerticalReaderHtml({
 <script>
 (function () {
   var viewport = document.getElementById('viewport');
+  var author = document.getElementById('author');
   var blocks = Array.prototype.slice.call(document.querySelectorAll('[data-block-index]'));
   var raf = 0;
   var lastBlock = -1;
@@ -427,6 +448,13 @@ function buildVerticalReaderHtml({
     }
   };
 
+  if (author) {
+    author.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'author' }));
+    });
+  }
   viewport.addEventListener('pointerdown', function () {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'activity' }));
   }, { passive: true });

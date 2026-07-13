@@ -24,12 +24,14 @@ import { type AppColors, useAppTheme } from '@/theme';
 
 interface ReadingInsightsViewProps {
   onDataRestored: () => void;
+  onOpenAuthor: (novelId: number) => void;
 }
 
 type BusyAction = 'export' | 'restore' | 'clear' | null;
 
 export function ReadingInsightsView({
   onDataRestored,
+  onOpenAuthor,
 }: ReadingInsightsViewProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -265,9 +267,20 @@ export function ReadingInsightsView({
                   <Text numberOfLines={2} style={styles.novelTitle}>
                     {novel.title}
                   </Text>
-                  <Text numberOfLines={1} style={styles.novelAuthor}>
-                    {novel.authorName}
-                  </Text>
+                  <Pressable
+                    accessibilityLabel={`作者「${novel.authorName}」のプロフィールを開く`}
+                    accessibilityRole="link"
+                    onPress={() => onOpenAuthor(novel.novelId)}
+                    style={({ pressed }) => [
+                      styles.novelAuthorButton,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text numberOfLines={1} style={styles.novelAuthor}>
+                      {novel.authorName}
+                    </Text>
+                    <Text style={styles.novelAuthorArrow}>↗</Text>
+                  </Pressable>
                 </View>
                 <View style={styles.rankingValue}>
                   <Text style={styles.rankingDuration}>
@@ -524,7 +537,24 @@ function createStyles(colors: AppColors) {
     },
     rankingBody: { flex: 1, gap: 3 },
     novelTitle: { color: colors.text, fontSize: 12, fontWeight: '800', lineHeight: 18 },
-    novelAuthor: { color: colors.textMuted, fontSize: 10 },
+    novelAuthorButton: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      maxWidth: '100%',
+    },
+    novelAuthor: {
+      flexShrink: 1,
+      color: colors.accentStrong,
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    novelAuthorArrow: {
+      color: colors.accentStrong,
+      fontSize: 9,
+      fontWeight: '900',
+    },
     rankingValue: { alignItems: 'flex-end', gap: 3 },
     rankingDuration: { color: colors.text, fontSize: 11, fontWeight: '800' },
     rankingCharacters: { color: colors.textMuted, fontSize: 9 },
