@@ -290,18 +290,6 @@ export function LibraryView({
         />
       </View>
 
-      {mode === 'history' ? (
-        <HistoryControls
-          filter={historyFilter}
-          onClear={items.length > 0 ? confirmClearHistory : undefined}
-          onFilterChange={setHistoryFilter}
-          onQueryChange={setHistoryQuery}
-          onSortChange={setHistorySort}
-          query={historyQuery}
-          sort={historySort}
-        />
-      ) : null}
-
       {mode === 'shelves' ? (
         <View style={styles.shelfControls}>
           <ScrollView
@@ -406,6 +394,19 @@ export function LibraryView({
           contentContainerStyle={styles.listContent}
           data={items}
           keyExtractor={(item) => `novel-${item.novelId}`}
+          ListHeaderComponent={
+            mode === 'history' ? (
+              <HistoryControls
+                filter={historyFilter}
+                onClear={items.length > 0 ? confirmClearHistory : undefined}
+                onFilterChange={setHistoryFilter}
+                onQueryChange={setHistoryQuery}
+                onSortChange={setHistorySort}
+                query={historyQuery}
+                sort={historySort}
+              />
+            ) : null
+          }
           ListEmptyComponent={
             <LibraryEmptyState
               colors={colors}
@@ -950,7 +951,6 @@ function createStyles(colors: AppColors) {
     modeTextActive: { color: colors.onAccent },
     historyControls: {
       gap: 22,
-      marginHorizontal: 16,
       marginBottom: 2,
       padding: 16,
       borderWidth: StyleSheet.hairlineWidth,
