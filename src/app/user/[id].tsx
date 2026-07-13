@@ -204,9 +204,13 @@ export default function UserProfileScreen() {
   ]);
 
   useEffect(() => {
-    void loadInitial();
+    // Reactのeffect本体で同期的にstate更新を始めないよう、次フレームへ渡す。
+    const frameId = requestAnimationFrame(() => {
+      void loadInitial();
+    });
 
     return () => {
+      cancelAnimationFrame(frameId);
       requestVersionRef.current += 1;
       loadingMoreRef.current = false;
     };
