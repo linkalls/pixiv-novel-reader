@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pixiv Novel Reader",
     "slug": "pixiv-novel-reader",
-    "version": "2.5.1",
+    "version": "2.5.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "pixivnovelreader",
@@ -19,7 +19,10 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.pixivnovelreader",
-      "versionCode": 33,
+      "versionCode": 34,
+      "permissions": [
+        "android.permission.REQUEST_INSTALL_PACKAGES"
+      ],
       "softwareKeyboardLayoutMode": "resize",
       "intentFilters": [
         {

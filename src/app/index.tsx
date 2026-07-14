@@ -49,6 +49,12 @@ import {
   type AppUpdateInfo,
 } from '@/lib/app-update';
 import {
+  downloadUpdateApk,
+  launchUpdateInstaller,
+  openUnknownAppInstallSettings,
+  type DownloadedUpdateApk,
+} from '@/lib/app-installer';
+import {
   isNewContentNotificationEnabled,
   notifyNewContent,
   setNewContentNotificationEnabled,
@@ -194,6 +200,10 @@ export default function HomeScreen() {
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
+  const [updateDownloadProgress, setUpdateDownloadProgress] = useState(0);
+  const [downloadedUpdateApk, setDownloadedUpdateApk] =
+    useState<DownloadedUpdateApk | null>(null);
   const [isNewContentNotificationOn, setIsNewContentNotificationOn] = useState(false);
   const [isNotificationSaving, setIsNotificationSaving] = useState(false);
   const [showManualToken, setShowManualToken] = useState(false);
@@ -647,6 +657,88 @@ export default function HomeScreen() {
     }
   }
 
+  function promptAppUpdate(info: AppUpdateInfo) {
+    const canInstallDirectly = Platform.OS === 'android' && info.apkAsset !== null;
+    Alert.alert(
+      `v${info.latestVersion}を利用できます`,
+      info.releaseNotes
+        ? info.releaseNotes.slice(0, 500)
+        : `現在 v${info.currentVersion}、最新 v${info.latestVersion}です。`,
+      [
+        { text: 'あとで', style: 'cancel' },
+        canInstallDirectly
+          ? {
+              text: 'ダウンロードして更新',
+              onPress: () => void installAppUpdate(info),
+            }
+          : {
+              text: 'Releaseを開く',
+              onPress: () => void Linking.openURL(info.releaseUrl),
+            },
+      ],
+    );
+  }
+
+  async function installAppUpdate(info: AppUpdateInfo) {
+    if (isInstallingUpdate) return;
+    if (!info.apkAsset) {
+      Alert.alert(
+        '対応APKが見つかりません',
+        'Releaseの添付ファイルを確認してください。',
+        [
+          { text: '閉じる', style: 'cancel' },
+          {
+            text: 'Releaseを開く',
+            onPress: () => void Linking.openURL(info.releaseUrl),
+          },
+        ],
+      );
+      return;
+    }
+
+    setIsInstallingUpdate(true);
+    setUpdateDownloadProgress(0);
+    let downloaded =
+      downloadedUpdateApk?.version === info.latestVersion
+        ? downloadedUpdateApk
+        : null;
+    try {
+      if (!downloaded) {
+        downloaded = await downloadUpdateApk(
+          info.latestVersion,
+          info.apkAsset,
+          setUpdateDownloadProgress,
+        );
+        setDownloadedUpdateApk(downloaded);
+      }
+      await launchUpdateInstaller(downloaded.localUri);
+    } catch (error) {
+      Alert.alert(
+        downloaded
+          ? 'インストーラーを起動できませんでした'
+          : 'APKをダウンロードできませんでした',
+        `${toErrorMessage(error)}\n\n提供元が未許可の場合は設定を開き、許可後に「インストールを再開」を押してください。`,
+        [
+          { text: '閉じる', style: 'cancel' },
+          ...(downloaded
+            ? [
+                {
+                  text: '提供元の許可設定',
+                  onPress: () => void openUnknownAppInstallSettings(),
+                },
+              ]
+            : []),
+          {
+            text: 'Releaseを開く',
+            onPress: () => void Linking.openURL(info.releaseUrl),
+          },
+        ],
+      );
+    } finally {
+      setIsInstallingUpdate(false);
+    }
+  }
+
   async function checkAppUpdate(force: boolean) {
     if (isCheckingUpdate) return;
     setIsCheckingUpdate(true);
@@ -656,35 +748,13 @@ export default function HomeScreen() {
       setAppUpdateInfo(info);
       if (info.shouldNotify) {
         await markUpdateNotified(info.latestVersion);
-        Alert.alert(
-          `v${info.latestVersion}を利用できます`,
-          info.releaseNotes
-            ? info.releaseNotes.slice(0, 500)
-            : '新しい機能と修正を含む更新があります。',
-          [
-            { text: 'あとで', style: 'cancel' },
-            {
-              text: 'Releaseを開く',
-              onPress: () => void Linking.openURL(info.releaseUrl),
-            },
-          ],
-        );
+        promptAppUpdate(info);
       } else if (force) {
-        Alert.alert(
-          info.hasUpdate ? '更新があります' : '最新版です',
-          info.hasUpdate
-            ? `現在 v${info.currentVersion}、最新 v${info.latestVersion}です。`
-            : `v${info.currentVersion}を利用中です。`,
-          info.hasUpdate
-            ? [
-                { text: '閉じる', style: 'cancel' },
-                {
-                  text: 'Releaseを開く',
-                  onPress: () => void Linking.openURL(info.releaseUrl),
-                },
-              ]
-            : [{ text: 'OK' }],
-        );
+        if (info.hasUpdate) {
+          promptAppUpdate(info);
+        } else {
+          Alert.alert('最新版です', `v${info.currentVersion}を利用中です。`);
+        }
       }
     } catch (error) {
       if (force) {
@@ -1450,16 +1520,30 @@ export default function HomeScreen() {
             <View style={styles.updateActions}>
               <Pressable
                 accessibilityRole="button"
-                disabled={isCheckingUpdate}
-                onPress={() => void checkAppUpdate(true)}
+                disabled={isCheckingUpdate || isInstallingUpdate}
+                onPress={() => {
+                  if (appUpdateInfo?.hasUpdate) {
+                    void installAppUpdate(appUpdateInfo);
+                  } else {
+                    void checkAppUpdate(true);
+                  }
+                }}
                 style={({ pressed }) => [
                   styles.updateCheckButton,
-                  isCheckingUpdate && styles.disabled,
+                  (isCheckingUpdate || isInstallingUpdate) && styles.disabled,
                   pressed && styles.pressed,
                 ]}
               >
                 <Text style={styles.updateCheckText}>
-                  {isCheckingUpdate ? '確認中…' : '更新を確認'}
+                  {isCheckingUpdate
+                    ? '確認中…'
+                    : isInstallingUpdate
+                      ? `ダウンロード中 ${Math.round(updateDownloadProgress * 100)}%`
+                      : appUpdateInfo?.hasUpdate
+                        ? downloadedUpdateApk?.version === appUpdateInfo.latestVersion
+                          ? 'インストールを再開'
+                          : `v${appUpdateInfo.latestVersion}へ更新`
+                        : '更新を確認'}
                 </Text>
               </Pressable>
               <Pressable

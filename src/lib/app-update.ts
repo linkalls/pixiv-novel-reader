@@ -1,6 +1,10 @@
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 
+import {
+  selectAndroidApkAsset,
+  type AppUpdateAsset,
+} from './app-update-assets';
 import { compareVersions, normalizeVersion } from './version-utils';
 
 const LATEST_RELEASE_API =
@@ -12,6 +16,7 @@ const LAST_NOTIFIED_VERSION_KEY = 'app-update-last-notified-version';
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export interface AppUpdateInfo {
+  apkAsset: AppUpdateAsset | null;
   currentVersion: string;
   latestVersion: string;
   releaseName: string;
@@ -70,6 +75,7 @@ export async function checkForAppUpdate(
     body?: unknown;
     html_url?: unknown;
     published_at?: unknown;
+    assets?: unknown;
   };
   const latestVersion = normalizeVersion(
     typeof release.tag_name === 'string' ? release.tag_name : '',
@@ -79,6 +85,7 @@ export async function checkForAppUpdate(
   }
 
   const currentVersion = normalizeVersion(getCurrentAppVersion()) || '0.0.0';
+  const apkAsset = selectAndroidApkAsset(release.assets, latestVersion);
   const lastNotifiedVersion = await SecureStore.getItemAsync(
     LAST_NOTIFIED_VERSION_KEY,
   ).catch(() => null);
@@ -86,6 +93,7 @@ export async function checkForAppUpdate(
   await SecureStore.setItemAsync(LAST_CHECK_KEY, String(Date.now()));
 
   return {
+    apkAsset,
     currentVersion,
     latestVersion,
     releaseName:
