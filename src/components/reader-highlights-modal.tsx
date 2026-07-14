@@ -66,6 +66,7 @@ export function ReaderHighlightsModal({
     [accent, background, border, muted, overlay, text],
   );
   const [items, setItems] = useState<ReaderHighlight[]>([]);
+  const [excerptDraft, setExcerptDraft] = useState('');
   const [note, setNote] = useState('');
   const [color, setColor] = useState<ReaderHighlightColor>('yellow');
   const [isLoading, setIsLoading] = useState(false);
@@ -79,6 +80,7 @@ export function ReaderHighlightsModal({
 
     let isActive = true;
     const frameId = requestAnimationFrame(() => {
+      setExcerptDraft(currentExcerpt);
       setNote('');
       setError(null);
       setIsLoading(true);
@@ -98,10 +100,21 @@ export function ReaderHighlightsModal({
       isActive = false;
       cancelAnimationFrame(frameId);
     };
-  }, [detail, visible]);
+  }, [currentExcerpt, detail, visible]);
+
+  async function importClipboardText() {
+    const value = await Clipboard.getStringAsync();
+    const normalized = value.trim().replace(/\s+/g, ' ').slice(0, 1000);
+    if (!normalized) {
+      onStatus('クリップボードに文字がありません');
+      return;
+    }
+    setExcerptDraft(normalized);
+    onStatus('選択した引用文を取り込みました');
+  }
 
   async function save() {
-    if (!detail || !currentExcerpt.trim() || isSaving) {
+    if (!detail || !excerptDraft.trim() || isSaving) {
       return;
     }
     setIsSaving(true);
@@ -110,7 +123,7 @@ export function ReaderHighlightsModal({
       await createReaderHighlight({
         detail,
         blockIndex: currentBlockIndex,
-        excerpt: currentExcerpt,
+        excerpt: excerptDraft,
         note,
         color,
       });
@@ -182,9 +195,28 @@ export function ReaderHighlightsModal({
             >
               <View style={styles.composer}>
                 <Text style={styles.sectionTitle}>現在の段落</Text>
-                <Text numberOfLines={6} style={styles.currentExcerpt}>
-                  {currentExcerpt || '本文を長押しすると、ここに選択した段落が表示される。'}
-                </Text>
+                <TextInput
+                  maxLength={1000}
+                  multiline
+                  onChangeText={setExcerptDraft}
+                  placeholder="本文を長押しするか、選択してコピーした文を取り込む"
+                  placeholderTextColor={muted}
+                  style={styles.excerptInput}
+                  textAlignVertical="top"
+                  value={excerptDraft}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => void importClipboardText()}
+                  style={({ pressed }) => [
+                    styles.clipboardButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.clipboardButtonText}>
+                    クリップボードの選択文を取り込む
+                  </Text>
+                </Pressable>
                 <View style={styles.colorRow}>
                   {COLOR_OPTIONS.map((option) => (
                     <Pressable
@@ -213,11 +245,11 @@ export function ReaderHighlightsModal({
                 />
                 <Pressable
                   accessibilityRole="button"
-                  disabled={!detail || !currentExcerpt.trim() || isSaving}
+                  disabled={!detail || !excerptDraft.trim() || isSaving}
                   onPress={() => void save()}
                   style={({ pressed }) => [
                     styles.saveButton,
-                    (!detail || !currentExcerpt.trim() || isSaving) && styles.disabled,
+                    (!detail || !excerptDraft.trim() || isSaving) && styles.disabled,
                     pressed && styles.pressed,
                   ]}
                 >
@@ -382,7 +414,29 @@ function createStyles(colors: {
       borderRadius: 16,
     },
     sectionTitle: { color: colors.text, fontSize: 14, fontWeight: '900' },
-    currentExcerpt: { color: colors.text, fontSize: 13, lineHeight: 21 },
+    excerptInput: {
+      minHeight: 96,
+      padding: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 12,
+      color: colors.text,
+      fontSize: 13,
+      lineHeight: 21,
+    },
+    clipboardButton: {
+      minHeight: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.accent,
+      borderRadius: 11,
+    },
+    clipboardButtonText: {
+      color: colors.accent,
+      fontSize: 10,
+      fontWeight: '900',
+    },
     colorRow: { flexDirection: 'row', gap: 12 },
     colorButton: {
       width: 34,

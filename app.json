@@ -20,7 +20,29 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.pixivnovelreader",
       "versionCode": 31,
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "resize",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "www.pixiv.net",
+              "pathPrefix": "/novel/show.php"
+            },
+            {
+              "scheme": "https",
+              "host": "pixiv.net",
+              "pathPrefix": "/novel/show.php"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
     "web": {
       "output": "static",
@@ -42,7 +64,21 @@
       ],
       "expo-secure-store",
       "expo-sqlite",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-share-intent",
+        {
+          "androidIntentFilters": [
+            "text/*"
+          ]
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "novel-updates"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

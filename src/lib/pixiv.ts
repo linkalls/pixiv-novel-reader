@@ -365,6 +365,28 @@ export async function fetchUserNovels(
   };
 }
 
+export async function fetchAllUserNovels(
+  userId: number,
+): Promise<PixivNovelItem[]> {
+  const novels: PixivNovelItem[] = [];
+  const seenIds = new Set<number>();
+  let nextUrl: string | null = null;
+
+  for (let pageNumber = 0; pageNumber < 200; pageNumber += 1) {
+    const page = await fetchUserNovels(userId, nextUrl);
+    for (const novel of page.novels) {
+      if (!seenIds.has(novel.id)) {
+        seenIds.add(novel.id);
+        novels.push(novel);
+      }
+    }
+    if (!page.nextUrl || page.nextUrl === nextUrl) break;
+    nextUrl = page.nextUrl;
+  }
+
+  return novels;
+}
+
 /** 現在の作品に近い小説をApp APIから取得する。 */
 export async function fetchRelatedNovels(
   novelId: number,

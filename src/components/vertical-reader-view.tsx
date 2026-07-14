@@ -16,14 +16,17 @@ interface VerticalReaderViewProps {
   embeddedImages: Record<string, string>;
   fontFamily: 'serif' | 'sans';
   fontSize: number;
+  fontWeight: number;
   horizontalPadding: number;
   initialProgress: number;
   lineHeight: number;
   meta: string | null;
   muted: string;
+  paragraphSpacing: number;
   onActivity: () => void;
   onAuthorPress: () => void;
   onHighlight: (blockIndex: number) => void;
+  onTap: () => void;
   onBlockChange: (blockIndex: number) => void;
   onProgress: (progress: number, scrollOffset: number) => void;
   seriesTitle: string | null;
@@ -51,15 +54,18 @@ export const VerticalReaderView = forwardRef<
     embeddedImages,
     fontFamily,
     fontSize,
+    fontWeight,
     horizontalPadding,
     initialProgress,
     lineHeight,
     meta,
     muted,
+    paragraphSpacing,
     onActivity,
     onAuthorPress,
     onBlockChange,
     onHighlight,
+    onTap,
     onProgress,
     seriesTitle,
     text,
@@ -79,11 +85,13 @@ export const VerticalReaderView = forwardRef<
         embeddedImages,
         fontFamily,
         fontSize,
+        fontWeight,
         horizontalPadding,
         initialProgress,
         lineHeight,
         meta,
         muted,
+        paragraphSpacing,
         seriesTitle,
         text,
         title,
@@ -97,11 +105,13 @@ export const VerticalReaderView = forwardRef<
       embeddedImages,
       fontFamily,
       fontSize,
+      fontWeight,
       horizontalPadding,
       initialProgress,
       lineHeight,
       meta,
       muted,
+      paragraphSpacing,
       seriesTitle,
       text,
       title,
@@ -155,6 +165,10 @@ export const VerticalReaderView = forwardRef<
       onHighlight(Math.max(0, Math.floor(message.blockIndex)));
     }
 
+    if (message.type === 'tap') {
+      onTap();
+    }
+
     if (
       message.type === 'progress' &&
       typeof message.progress === 'number' &&
@@ -203,11 +217,13 @@ function buildVerticalReaderHtml({
   embeddedImages,
   fontFamily,
   fontSize,
+  fontWeight,
   horizontalPadding,
   initialProgress,
   lineHeight,
   meta,
   muted,
+  paragraphSpacing,
   seriesTitle,
   text,
   title,
@@ -219,6 +235,7 @@ function buildVerticalReaderHtml({
   | 'onAuthorPress'
   | 'onBlockChange'
   | 'onHighlight'
+  | 'onTap'
   | 'onProgress'
 >): string {
   const renderedBlocks = blocks
@@ -241,6 +258,7 @@ function buildVerticalReaderHtml({
   body {
     color: ${escapeCssColor(text)};
     font-family: ${fontFamily === 'serif' ? 'serif' : 'sans-serif'};
+    font-weight: ${Math.round(fontWeight)};
     -webkit-text-size-adjust: 100%;
     overscroll-behavior: none;
   }
@@ -309,7 +327,7 @@ function buildVerticalReaderHtml({
   .block {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    margin-left: ${verticalColumnGap.toFixed(2)}em;
+    margin-left: calc(${verticalColumnGap.toFixed(2)}em + ${Math.round(paragraphSpacing)}px);
   }
   .chapter {
     font-family: sans-serif;
@@ -485,26 +503,46 @@ function buildVerticalReaderHtml({
   }
   blocks.forEach(function (block) {
     var holdTimer = 0;
+    var startX = 0;
+    var startY = 0;
+    var didHold = false;
+    var moved = false;
     var cancelHold = function () {
       if (holdTimer) clearTimeout(holdTimer);
       holdTimer = 0;
     };
-    block.addEventListener('pointerdown', function () {
+    block.addEventListener('pointerdown', function (event) {
       cancelHold();
+      startX = event.clientX;
+      startY = event.clientY;
+      didHold = false;
+      moved = false;
       holdTimer = setTimeout(function () {
         holdTimer = 0;
+        didHold = true;
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'highlight',
           blockIndex: Number(block.getAttribute('data-block-index'))
         }));
       }, 620);
     }, { passive: true });
-    block.addEventListener('pointerup', cancelHold, { passive: true });
+    block.addEventListener('pointermove', function (event) {
+      if (Math.hypot(event.clientX - startX, event.clientY - startY) > 9) {
+        moved = true;
+        cancelHold();
+      }
+    }, { passive: true });
+    block.addEventListener('pointerup', function () {
+      cancelHold();
+      if (!didHold && !moved) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'tap' }));
+      }
+    }, { passive: true });
     block.addEventListener('pointercancel', cancelHold, { passive: true });
-    block.addEventListener('pointermove', cancelHold, { passive: true });
     block.addEventListener('contextmenu', function (event) {
       event.preventDefault();
       cancelHold();
+      didHold = true;
       window.ReactNativeWebView.postMessage(JSON.stringify({
         type: 'highlight',
         blockIndex: Number(block.getAttribute('data-block-index'))

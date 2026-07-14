@@ -11,11 +11,14 @@ import {
 } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,8 +28,14 @@ import {
   getNovelReadingStatuses,
   type NovelReadingStatus,
 } from '@/lib/library-db';
+import { muteAuthor, muteTag } from '@/lib/content-preferences-db';
+import {
+  enqueueOfflineDownloads,
+  processOfflineDownloadQueue,
+} from '@/lib/offline-download-queue';
 import { cacheNovelForRoute } from '@/lib/novel-route-cache';
 import {
+  fetchAllUserNovels,
   fetchUserNovels,
   fetchUserProfile,
   setUserFollow,
@@ -58,10 +67,14 @@ export default function UserProfileScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isFollowLoading, setIsFollowLoading] = useState(false);
+  const [isQueueLoading, setIsQueueLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(
     isValidUserId ? null : 'ユーザーIDを読み取れませんでした',
   );
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [profileSearchQuery, setProfileSearchQuery] = useState('');
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedSeriesId, setSelectedSeriesId] = useState<number | null>(null);
 
   // 画面を素早く行き来した場合に、古い通信結果で新しい画面を上書きしない。
   const requestVersionRef = useRef(0);
@@ -264,12 +277,138 @@ export default function UserProfileScreen() {
     }
   }
 
+  async function queueNovelsForOffline(
+    target: 'filtered' | 'all',
+  ) {
+    if (isQueueLoading) return;
+    setIsQueueLoading(true);
+    setErrorMessage(null);
+    try {
+      const targetNovels =
+        target === 'all' ? await fetchAllUserNovels(userId) : filteredNovels;
+      const queued = await enqueueOfflineDownloads(targetNovels);
+      const result = await processOfflineDownloadQueue();
+      Alert.alert(
+        'オフライン保存キューへ追加しました',
+        result.blockedByWifi
+          ? `${queued}作品を追加しました。Wi-Fi接続時に自動で再開します。`
+          : `${queued}作品を追加し、${result.completed}作品を保存しました。${
+              result.failed > 0 ? ` ${result.failed}作品は失敗一覧から再試行できます。` : ''
+            }`,
+      );
+      const nextStatuses = await readReadingStatuses(targetNovels);
+      setReadingStatuses((current) => ({ ...current, ...nextStatuses }));
+    } catch (error) {
+      setErrorMessage(`一括保存を開始できませんでした: ${toErrorMessage(error)}`);
+    } finally {
+      setIsQueueLoading(false);
+    }
+  }
+
+  const availableTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const novel of novels) {
+      for (const tag of novel.tags) {
+        const name = tag.name.trim();
+        if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'ja'))
+      .slice(0, 30);
+  }, [novels]);
+
+  const availableSeries = useMemo(() => {
+    const series = new Map<number, { title: string; count: number }>();
+    for (const novel of novels) {
+      if (!novel.series) continue;
+      const current = series.get(novel.series.id);
+      series.set(novel.series.id, {
+        title: novel.series.title,
+        count: (current?.count ?? 0) + 1,
+      });
+    }
+    return [...series.entries()]
+      .map(([id, value]) => ({ id, ...value }))
+      .sort((left, right) => right.count - left.count || left.title.localeCompare(right.title, 'ja'));
+  }, [novels]);
+
+  const filteredNovels = (() => {
+    const query = profileSearchQuery.trim().toLocaleLowerCase('ja-JP');
+    return novels.filter((novel) => {
+      if (selectedSeriesId !== null && novel.series?.id !== selectedSeriesId) {
+        return false;
+      }
+      if (
+        selectedTag &&
+        !novel.tags.some((tag) => tag.name.trim() === selectedTag)
+      ) {
+        return false;
+      }
+      if (!query) return true;
+      return [
+        novel.title,
+        novel.caption,
+        novel.series?.title ?? '',
+        ...novel.tags.map((tag) => tag.name),
+      ].some((value) => value.toLocaleLowerCase('ja-JP').includes(query));
+    });
+  })();
+
+  function confirmMuteAuthor() {
+    if (!profileResult) return;
+    Alert.alert(
+      `「${profileResult.user.name}」をミュートしますか？`,
+      'この作者の作品をおすすめ・新着・ランキング・検索・ブックマーク一覧から非表示にします。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: 'ミュート',
+          style: 'destructive',
+          onPress: () => {
+            void muteAuthor(profileResult.user.id, profileResult.user.name).then(() => {
+              Alert.alert('ミュートしました', 'ライブラリの「ミュート」から解除できます。');
+            });
+          },
+        },
+      ],
+    );
+  }
+
+  function confirmMuteTag(tagName: string) {
+    Alert.alert(
+      `#${tagName} をミュートしますか？`,
+      'このタグを含む作品をすべての一覧から非表示にします。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: 'ミュート',
+          style: 'destructive',
+          onPress: () => void muteTag(tagName),
+        },
+      ],
+    );
+  }
+
   const listHeader = profileResult ? (
     <ProfileHeader
+      availableSeries={availableSeries}
+      availableTags={availableTags}
       colors={colors}
+      filteredCount={filteredNovels.length}
       isFollowLoading={isFollowLoading}
+      isQueueLoading={isQueueLoading}
+      onDownloadAll={() => void queueNovelsForOffline('all')}
+      onDownloadFiltered={() => void queueNovelsForOffline('filtered')}
+      onMuteAuthor={confirmMuteAuthor}
+      onQueryChange={setProfileSearchQuery}
+      onSelectSeries={setSelectedSeriesId}
+      onSelectTag={setSelectedTag}
       onToggleFollow={() => void toggleFollow()}
       profileResult={profileResult}
+      query={profileSearchQuery}
+      selectedSeriesId={selectedSeriesId}
+      selectedTag={selectedTag}
       styles={styles}
     />
   ) : null;
@@ -317,13 +456,13 @@ export default function UserProfileScreen() {
       ) : (
         <FlatList
           contentContainerStyle={styles.listContent}
-          data={novels}
+          data={filteredNovels}
           keyExtractor={(novel) => String(novel.id)}
           ListEmptyComponent={
             <View style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>公開中の小説はありません</Text>
+              <Text style={styles.emptyTitle}>条件に合う小説はありません</Text>
               <Text style={styles.emptyText}>
-                この作者が公開している小説は、現在取得できませんでした。
+                作者内検索・タグ・シリーズの条件を変更してみてください。
               </Text>
             </View>
           }
@@ -371,11 +510,11 @@ export default function UserProfileScreen() {
                   },
                 });
               }}
+              onTagLongPress={confirmMuteTag}
               onTagPress={(tagName) => {
-                router.push({
-                  pathname: '/',
-                  params: { tag: tagName },
-                });
+                setSelectedTag((current) =>
+                  current === tagName ? null : tagName,
+                );
               }}
               readingStatus={readingStatuses[item.id]}
             />
@@ -387,16 +526,42 @@ export default function UserProfileScreen() {
 }
 
 function ProfileHeader({
+  availableSeries,
+  availableTags,
   colors,
+  filteredCount,
   isFollowLoading,
+  isQueueLoading,
+  onDownloadAll,
+  onDownloadFiltered,
+  onMuteAuthor,
+  onQueryChange,
+  onSelectSeries,
+  onSelectTag,
   onToggleFollow,
   profileResult,
+  query,
+  selectedSeriesId,
+  selectedTag,
   styles,
 }: {
+  availableSeries: { id: number; title: string; count: number }[];
+  availableTags: [string, number][];
   colors: AppColors;
+  filteredCount: number;
   isFollowLoading: boolean;
+  isQueueLoading: boolean;
+  onDownloadAll: () => void;
+  onDownloadFiltered: () => void;
+  onMuteAuthor: () => void;
+  onQueryChange: (value: string) => void;
+  onSelectSeries: (value: number | null) => void;
+  onSelectTag: (value: string | null) => void;
   onToggleFollow: () => void;
   profileResult: UserProfileResult;
+  query: string;
+  selectedSeriesId: number | null;
+  selectedTag: string | null;
   styles: ReturnType<typeof createStyles>;
 }) {
   const { profile, user } = profileResult;
@@ -437,7 +602,8 @@ function ProfileHeader({
         <Text style={styles.profileAccount}>@{user.account}</Text>
       </View>
 
-      <Pressable
+      <View style={styles.profileActions}>
+        <Pressable
         accessibilityRole="button"
         disabled={isFollowLoading}
         onPress={onToggleFollow}
@@ -463,7 +629,18 @@ function ProfileHeader({
             {user.isFollowed ? 'フォロー中' : 'フォローする'}
           </Text>
         )}
-      </Pressable>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          onPress={onMuteAuthor}
+          style={({ pressed }) => [
+            styles.muteAuthorButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.muteAuthorText}>ミュート</Text>
+        </Pressable>
+      </View>
 
       {metadata.length > 0 ? (
         <View style={styles.metadataRow}>
@@ -506,7 +683,138 @@ function ProfileHeader({
           {profile.totalNovels.toLocaleString()}作品
         </Text>
       </View>
+
+      <View style={styles.profileFilters}>
+        <TextInput
+          onChangeText={onQueryChange}
+          placeholder="この作者の作品を検索"
+          placeholderTextColor={colors.placeholder}
+          returnKeyType="search"
+          style={styles.profileSearchInput}
+          value={query}
+        />
+        <View style={styles.filterSummaryRow}>
+          <Text style={styles.filterSummary}>{filteredCount}作品を表示</Text>
+          {(selectedTag || selectedSeriesId !== null || query) ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                onQueryChange('');
+                onSelectTag(null);
+                onSelectSeries(null);
+              }}
+            >
+              <Text style={styles.clearFiltersText}>条件をクリア</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        {availableSeries.length > 0 ? (
+          <View style={styles.filterGroup}>
+            <Text style={styles.filterGroupLabel}>シリーズ</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.filterChips}>
+                <FilterChip
+                  active={selectedSeriesId === null}
+                  label="すべて"
+                  onPress={() => onSelectSeries(null)}
+                  styles={styles}
+                />
+                {availableSeries.map((series) => (
+                  <FilterChip
+                    active={selectedSeriesId === series.id}
+                    key={series.id}
+                    label={`${series.title} · ${series.count}`}
+                    onPress={() => onSelectSeries(series.id)}
+                    styles={styles}
+                  />
+                ))}
+              </View>
+            </ScrollView>
+          </View>
+        ) : null}
+        {availableTags.length > 0 ? (
+          <View style={styles.filterGroup}>
+            <Text style={styles.filterGroupLabel}>タグ</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.filterChips}>
+                <FilterChip
+                  active={selectedTag === null}
+                  label="すべて"
+                  onPress={() => onSelectTag(null)}
+                  styles={styles}
+                />
+                {availableTags.map(([tagName, count]) => (
+                  <FilterChip
+                    active={selectedTag === tagName}
+                    key={tagName}
+                    label={`#${tagName} · ${count}`}
+                    onPress={() => onSelectTag(tagName)}
+                    styles={styles}
+                  />
+                ))}
+                <View style={styles.downloadActions}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isQueueLoading || filteredCount === 0}
+            onPress={onDownloadFiltered}
+            style={({ pressed }) => [
+              styles.downloadFilteredButton,
+              (isQueueLoading || filteredCount === 0) && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.downloadFilteredText}>
+              {isQueueLoading ? 'キューへ追加中…' : `表示中の${filteredCount}作品を保存`}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isQueueLoading}
+            onPress={onDownloadAll}
+            style={({ pressed }) => [
+              styles.downloadAllButton,
+              isQueueLoading && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.downloadAllText}>作者の全作品を保存</Text>
+          </Pressable>
+        </View>
+      </View>
+            </ScrollView>
+          </View>
+        ) : null}
+      </View>
     </View>
+  );
+}
+
+function FilterChip({
+  active,
+  label,
+  onPress,
+  styles,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.filterChip,
+        active && styles.filterChipActive,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -628,9 +936,10 @@ function createStyles(colors: AppColors) {
       fontSize: 13,
       fontWeight: '700',
     },
+    profileActions: { flexDirection: 'row', gap: 9, marginHorizontal: 18 },
     followButton: {
+      flex: 1,
       minHeight: 42,
-      marginHorizontal: 18,
       alignItems: 'center',
       justifyContent: 'center',
       borderRadius: 14,
@@ -647,6 +956,15 @@ function createStyles(colors: AppColors) {
       fontWeight: '900',
     },
     followButtonTextActive: { color: colors.text },
+    muteAuthorButton: {
+      minHeight: 42,
+      justifyContent: 'center',
+      paddingHorizontal: 15,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.danger,
+      borderRadius: 14,
+    },
+    muteAuthorText: { color: colors.danger, fontSize: 11, fontWeight: '900' },
     metadataRow: {
       flexDirection: 'row',
       flexWrap: 'wrap',
@@ -718,6 +1036,58 @@ function createStyles(colors: AppColors) {
       fontSize: 11,
       fontWeight: '700',
     },
+    profileFilters: { gap: 12 },
+    profileSearchInput: {
+      minHeight: 50,
+      paddingHorizontal: 15,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 15,
+      color: colors.text,
+      backgroundColor: colors.input,
+      fontSize: 13,
+    },
+    filterSummaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    filterSummary: { color: colors.textMuted, fontSize: 10, fontWeight: '700' },
+    clearFiltersText: { color: colors.accentStrong, fontSize: 10, fontWeight: '900' },
+    filterGroup: { gap: 7 },
+    filterGroupLabel: { color: colors.text, fontSize: 11, fontWeight: '900' },
+    filterChips: { flexDirection: 'row', gap: 7, paddingRight: 16 },
+    filterChip: {
+      minHeight: 38,
+      justifyContent: 'center',
+      paddingHorizontal: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 12,
+      backgroundColor: colors.surfaceAlt,
+    },
+    filterChipActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+    filterChipText: { color: colors.textMuted, fontSize: 10, fontWeight: '800' },
+    filterChipTextActive: { color: colors.accentStrong },
+    downloadActions: { flexDirection: 'row', gap: 8, marginTop: 2 },
+    downloadFilteredButton: {
+      flex: 1,
+      minHeight: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 10,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.accent,
+      borderRadius: 13,
+      backgroundColor: colors.accentSoft,
+    },
+    downloadFilteredText: { color: colors.accentStrong, fontSize: 10, fontWeight: '900' },
+    downloadAllButton: {
+      flex: 1,
+      minHeight: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 10,
+      borderRadius: 13,
+      backgroundColor: colors.accent,
+    },
+    downloadAllText: { color: colors.onAccent, fontSize: 10, fontWeight: '900' },
     centered: {
       flex: 1,
       alignItems: 'center',

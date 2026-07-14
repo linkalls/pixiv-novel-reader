@@ -13,14 +13,25 @@ const MAX_SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 
 export interface ReadingStatistics {
   charactersRead: number;
+  currentStreakDays: number;
   daily: ReadingDayBucket[];
+  dailyGoalMinutes: number;
   finishedNovels: number;
+  longestStreakDays: number;
   last7DaysDurationMs: number;
   sessionCount: number;
   todayDurationMs: number;
+  topAuthors: ReadingTopAuthor[];
   topNovels: ReadingTopNovel[];
+  topTags: ReadingTopTag[];
   totalDurationMs: number;
   uniqueNovels: number;
+  weeklyGoalMinutes: number;
+}
+
+export interface ReadingGoals {
+  dailyMinutes: number;
+  weeklyMinutes: number;
 }
 
 export interface ReadingTopNovel {
@@ -30,6 +41,18 @@ export interface ReadingTopNovel {
   novelId: number;
   sessions: number;
   title: string;
+}
+
+export interface ReadingTopAuthor {
+  authorName: string;
+  finishedWorks: number;
+  latestReadAt: number;
+  works: number;
+}
+
+export interface ReadingTopTag {
+  tagName: string;
+  works: number;
 }
 
 interface ReadingSessionRow {
@@ -82,6 +105,17 @@ async function initializeReadingStatsSchema(
       ON reading_sessions(ended_at DESC);
     CREATE INDEX IF NOT EXISTS reading_sessions_novel_idx
       ON reading_sessions(novel_id, ended_at DESC);
+
+    CREATE TABLE IF NOT EXISTS reading_goals (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      daily_minutes INTEGER NOT NULL DEFAULT 20,
+      weekly_minutes INTEGER NOT NULL DEFAULT 120,
+      updated_at INTEGER NOT NULL
+    );
+
+    INSERT OR IGNORE INTO reading_goals (
+      id, daily_minutes, weekly_minutes, updated_at
+    ) VALUES (1, 20, 120, ${Date.now()});
   `);
 
   const columns = await database.getAllAsync<{ name: string }>(
@@ -220,10 +254,50 @@ async function persistReadingSession(
   );
 }
 
+export async function getReadingGoals(): Promise<ReadingGoals> {
+  const database = await getStatsDatabase();
+  const row = await database.getFirstAsync<{
+    daily_minutes: number;
+    weekly_minutes: number;
+  }>('SELECT daily_minutes, weekly_minutes FROM reading_goals WHERE id = 1');
+  return {
+    dailyMinutes: clampGoalMinutes(row?.daily_minutes, 20),
+    weeklyMinutes: clampGoalMinutes(row?.weekly_minutes, 120),
+  };
+}
+
+export async function setReadingGoals(goals: ReadingGoals): Promise<void> {
+  const database = await getStatsDatabase();
+  await database.runAsync(
+    `
+      INSERT INTO reading_goals (
+        id, daily_minutes, weekly_minutes, updated_at
+      ) VALUES (1, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        daily_minutes = excluded.daily_minutes,
+        weekly_minutes = excluded.weekly_minutes,
+        updated_at = excluded.updated_at
+    `,
+    clampGoalMinutes(goals.dailyMinutes, 20),
+    clampGoalMinutes(goals.weeklyMinutes, 120),
+    Date.now(),
+  );
+}
+
 export async function getReadingStatistics(days = 30): Promise<ReadingStatistics> {
   const database = await getStatsDatabase();
   const safeDays = Math.max(1, Math.min(365, Math.floor(days)));
   const cutoff = Date.now() - safeDays * 24 * 60 * 60 * 1000;
+  const goals = await getReadingGoals();
+  const activeDateRows = await database.getAllAsync<{ date: string }>(`
+    SELECT DISTINCT date(ended_at / 1000, 'unixepoch', 'localtime') AS date
+    FROM reading_sessions
+    WHERE duration_ms >= 5000
+    ORDER BY date ASC
+  `);
+  const streaks = calculateReadingStreaks(
+    activeDateRows.map((row) => row.date),
+  );
 
   const totals = await database.getFirstAsync<{
     characters_read: number | null;
@@ -314,14 +388,63 @@ export async function getReadingStatistics(days = 30): Promise<ReadingStatistics
     cutoff,
   );
 
+  const authorRows = await database.getAllAsync<{
+    author_name: string;
+    finished_works: number;
+    latest_read_at: number;
+    works: number;
+  }>(`
+    SELECT
+      author_name,
+      COUNT(*) AS works,
+      SUM(CASE WHEN is_finished = 1 THEN 1 ELSE 0 END) AS finished_works,
+      MAX(last_read_at) AS latest_read_at
+    FROM reading_history
+    GROUP BY author_name
+    ORDER BY works DESC, latest_read_at DESC
+    LIMIT 8
+  `);
+
+  const tagRows = await database.getAllAsync<{ tags_json: string }>(
+    'SELECT tags_json FROM reading_history',
+  );
+  const tagCounts = new Map<string, number>();
+  for (const row of tagRows) {
+    try {
+      const tags = JSON.parse(row.tags_json) as unknown;
+      if (!Array.isArray(tags)) continue;
+      const uniqueTags = new Set(
+        tags.filter(
+          (tag): tag is string =>
+            typeof tag === 'string' && tag.trim().length > 0,
+        ),
+      );
+      for (const tag of uniqueTags) {
+        tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+      }
+    } catch {
+      // 壊れたタグJSONは集計対象から外す。
+    }
+  }
+  const topTags = [...tagCounts.entries()]
+    .sort(
+      (left, right) =>
+        right[1] - left[1] || left[0].localeCompare(right[0], 'ja'),
+    )
+    .slice(0, 12)
+    .map(([tagName, works]) => ({ tagName, works }));
+
   return {
     totalDurationMs: totals?.duration_ms ?? 0,
     todayDurationMs: today?.duration_ms ?? 0,
     last7DaysDurationMs: last7Days?.duration_ms ?? 0,
     charactersRead: totals?.characters_read ?? 0,
+    currentStreakDays: streaks.current,
+    dailyGoalMinutes: goals.dailyMinutes,
     sessionCount: totals?.session_count ?? 0,
     uniqueNovels: totals?.unique_novels ?? 0,
     finishedNovels: finished?.count ?? 0,
+    longestStreakDays: streaks.longest,
     daily: fillReadingDayBuckets(
       dailyRows.map((row) => ({
         date: row.date,
@@ -331,6 +454,14 @@ export async function getReadingStatistics(days = 30): Promise<ReadingStatistics
       })),
       7,
     ),
+    weeklyGoalMinutes: goals.weeklyMinutes,
+    topAuthors: authorRows.map((row) => ({
+      authorName: row.author_name,
+      finishedWorks: row.finished_works,
+      latestReadAt: row.latest_read_at,
+      works: row.works,
+    })),
+    topTags,
     topNovels: topRows.map((row) => ({
       novelId: row.novel_id,
       title: row.title,
@@ -345,6 +476,64 @@ export async function getReadingStatistics(days = 30): Promise<ReadingStatistics
 export async function clearReadingStatistics(): Promise<void> {
   const database = await getStatsDatabase();
   await database.runAsync('DELETE FROM reading_sessions');
+}
+
+function calculateReadingStreaks(dates: readonly string[]): {
+  current: number;
+  longest: number;
+} {
+  const uniqueDates = Array.from(new Set(dates)).sort();
+  if (uniqueDates.length === 0) return { current: 0, longest: 0 };
+
+  let longest = 1;
+  let running = 1;
+  for (let index = 1; index < uniqueDates.length; index += 1) {
+    const previous = parseLocalDate(uniqueDates[index - 1]);
+    const current = parseLocalDate(uniqueDates[index]);
+    const differenceDays = Math.round(
+      (current.getTime() - previous.getTime()) / 86_400_000,
+    );
+    running = differenceDays === 1 ? running + 1 : 1;
+    longest = Math.max(longest, running);
+  }
+
+  const dateSet = new Set(uniqueDates);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  let cursor = dateSet.has(formatLocalDate(today)) ? today : yesterday;
+  if (!dateSet.has(formatLocalDate(cursor))) {
+    return { current: 0, longest };
+  }
+
+  let currentStreak = 0;
+  while (dateSet.has(formatLocalDate(cursor))) {
+    currentStreak += 1;
+    cursor = new Date(cursor);
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return { current: currentStreak, longest };
+}
+
+function parseLocalDate(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function formatLocalDate(value: Date): string {
+  return [
+    value.getFullYear(),
+    String(value.getMonth() + 1).padStart(2, '0'),
+    String(value.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function clampGoalMinutes(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed)
+    ? Math.max(5, Math.min(1440, Math.round(parsed)))
+    : fallback;
 }
 
 function clampProgress(progress: number): number {

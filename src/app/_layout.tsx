@@ -1,9 +1,14 @@
+import * as Linking from 'expo-linking';
 import * as SecureStore from 'expo-secure-store';
 import * as SystemUI from 'expo-system-ui';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
+import { useEffect, useRef } from 'react';
+import { AppState } from 'react-native';
 
+import { runAutomaticBackupIfDue } from '@/lib/app-backup';
+import { configureAppNotifications } from '@/lib/app-notifications';
 import { subscribePixivRefreshToken } from '@/lib/pixiv';
 import { AppThemeProvider, useAppTheme } from '@/theme';
 
@@ -11,14 +16,21 @@ const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 
 export default function RootLayout() {
   return (
-    <AppThemeProvider>
-      <RootNavigator />
-    </AppThemeProvider>
+    <ShareIntentProvider options={{ resetOnBackground: false }}>
+      <AppThemeProvider>
+        <RootNavigator />
+      </AppThemeProvider>
+    </ShareIntentProvider>
   );
 }
 
 function RootNavigator() {
   const { colors, isDark } = useAppTheme();
+  const router = useRouter();
+  const linkingUrl = Linking.useLinkingURL();
+  const { hasShareIntent, shareIntent, resetShareIntent } =
+    useShareIntentContext();
+  const lastHandledValueRef = useRef<string | null>(null);
 
   useEffect(() => {
     void SystemUI.setBackgroundColorAsync(colors.background).catch(() => {});
@@ -31,6 +43,47 @@ function RootNavigator() {
       ),
     [],
   );
+
+  useEffect(() => {
+    void configureAppNotifications().catch(() => {});
+    void runAutomaticBackupIfDue().catch(() => {});
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void runAutomaticBackupIfDue().catch(() => {});
+      }
+    });
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    const novelId = extractPixivNovelId(linkingUrl);
+    if (!novelId || lastHandledValueRef.current === `link:${novelId}`) {
+      return;
+    }
+
+    lastHandledValueRef.current = `link:${novelId}`;
+    router.push({
+      pathname: '/novel/detail/[id]',
+      params: { id: String(novelId) },
+    });
+  }, [linkingUrl, router]);
+
+  useEffect(() => {
+    if (!hasShareIntent) {
+      return;
+    }
+
+    const sharedValue = shareIntent.webUrl ?? shareIntent.text ?? '';
+    const novelId = extractPixivNovelId(sharedValue);
+    if (novelId && lastHandledValueRef.current !== `share:${novelId}`) {
+      lastHandledValueRef.current = `share:${novelId}`;
+      router.push({
+        pathname: '/novel/detail/[id]',
+        params: { id: String(novelId) },
+      });
+    }
+    resetShareIntent();
+  }, [hasShareIntent, resetShareIntent, router, shareIntent.text, shareIntent.webUrl]);
 
   return (
     <>
@@ -52,4 +105,26 @@ function RootNavigator() {
       </Stack>
     </>
   );
+}
+
+function extractPixivNovelId(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const patterns = [
+    /(?:https?:\/\/)?(?:www\.)?pixiv\.net\/novel\/show\.php\?[^\s#]*\bid=(\d+)/i,
+    /pixivnovelreader:\/\/(?:novel\/)?(?:detail\/)?(\d+)/i,
+    /pixivnovelreader:\/\/novel\/detail\/(\d+)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    const parsed = match?.[1] ? Number(match[1]) : Number.NaN;
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return null;
 }

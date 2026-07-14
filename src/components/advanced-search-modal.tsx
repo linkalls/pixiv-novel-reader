@@ -71,6 +71,7 @@ export function AdvancedSearchModal({
       minBookmarks: null,
       includeR18: true,
       includeAi: true,
+      dateRange: 'all',
       seriesMode: 'all',
       hideFinished: false,
     };
@@ -143,6 +144,28 @@ export function AdvancedSearchModal({
                   styles={styles}
                   value={minBookmarks}
                 />
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>投稿期間</Text>
+                <View style={styles.chipRow}>
+                  {(
+                    [
+                      ['all', '全期間'],
+                      ['week', '1週間以内'],
+                      ['month', '1か月以内'],
+                      ['year', '1年以内'],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <ChoiceChip
+                      active={draft.dateRange === value}
+                      key={value}
+                      label={label}
+                      onPress={() => setDraft({ ...draft, dateRange: value })}
+                      styles={styles}
+                    />
+                  ))}
+                </View>
               </View>
 
               <View style={styles.section}>

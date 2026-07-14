@@ -11,12 +11,21 @@ import {
 } from 'react-native';
 
 import {
+  createAutomaticBackup,
   exportAppBackup,
-  pickAndRestoreAppBackup,
+  getAutomaticBackupState,
+  pickAppBackupForPreview,
+  restoreAppBackup,
+  type BackupPreviewSelection,
+  restoreLatestAutomaticBackup,
+  setAutomaticBackupEnabled,
+  shareLatestAutomaticBackup,
+  type AutomaticBackupState,
 } from '@/lib/app-backup';
 import {
   clearReadingStatistics,
   getReadingStatistics,
+  setReadingGoals,
   type ReadingStatistics,
 } from '@/lib/reading-stats-db';
 import { formatReadingDuration } from '@/lib/reading-stats';
@@ -27,7 +36,16 @@ interface ReadingInsightsViewProps {
   onOpenAuthor: (novelId: number) => void;
 }
 
-type BusyAction = 'export' | 'restore' | 'clear' | null;
+type BusyAction =
+  | 'export'
+  | 'restore'
+  | 'clear'
+  | 'goal'
+  | 'auto-create'
+  | 'auto-restore'
+  | 'auto-share'
+  | 'auto-toggle'
+  | null;
 
 export function ReadingInsightsView({
   onDataRestored,
@@ -39,12 +57,19 @@ export function ReadingInsightsView({
   const [isLoading, setIsLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const [automaticBackup, setAutomaticBackup] =
+    useState<AutomaticBackupState | null>(null);
 
   const loadStatistics = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      setStatistics(await getReadingStatistics(30));
+      const [nextStatistics, nextAutomaticBackup] = await Promise.all([
+        getReadingStatistics(30),
+        getAutomaticBackupState(),
+      ]);
+      setStatistics(nextStatistics);
+      setAutomaticBackup(nextAutomaticBackup);
     } catch (loadError) {
       setError(toErrorMessage(loadError));
     } finally {
@@ -78,33 +103,37 @@ export function ReadingInsightsView({
     }
   }
 
-  function confirmRestoreBackup() {
-    Alert.alert(
-      'バックアップから復元しますか？',
-      '現在の履歴、本棚、しおり、オフライン本文、統計、表示設定をバックアップ時点の内容へ置き換えます。認証情報は変更しません。',
-      [
-        { text: 'キャンセル', style: 'cancel' },
-        {
-          text: '復元する',
-          onPress: () => {
-            void restoreBackup();
-          },
-        },
-      ],
-    );
-  }
-
-  async function restoreBackup() {
-    if (busyAction) {
-      return;
-    }
+  async function chooseBackupForRestore() {
+    if (busyAction) return;
     setBusyAction('restore');
     setError(null);
     try {
-      const result = await pickAndRestoreAppBackup();
-      if (!result) {
-        return;
-      }
+      const preview = await pickAppBackupForPreview();
+      if (!preview) return;
+      Alert.alert(
+        'バックアップ内容を確認',
+        formatBackupPreview(preview),
+        [
+          { text: 'キャンセル', style: 'cancel' },
+          {
+            text: 'この内容を復元',
+            onPress: () => void restorePreviewedBackup(preview),
+          },
+        ],
+      );
+    } catch (previewError) {
+      setError(toErrorMessage(previewError));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function restorePreviewedBackup(preview: BackupPreviewSelection) {
+    if (busyAction) return;
+    setBusyAction('restore');
+    setError(null);
+    try {
+      const result = await restoreAppBackup(preview.payload);
       await loadStatistics();
       onDataRestored();
       Alert.alert(
@@ -113,6 +142,98 @@ export function ReadingInsightsView({
       );
     } catch (restoreError) {
       setError(toErrorMessage(restoreError));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function toggleAutomaticBackup() {
+    if (busyAction) return;
+    setBusyAction('auto-toggle');
+    setError(null);
+    try {
+      await setAutomaticBackupEnabled(!automaticBackup?.enabled);
+      setAutomaticBackup(await getAutomaticBackupState());
+    } catch (toggleError) {
+      setError(toErrorMessage(toggleError));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function createAutoBackupNow() {
+    if (busyAction) return;
+    setBusyAction('auto-create');
+    setError(null);
+    try {
+      await createAutomaticBackup();
+      setAutomaticBackup(await getAutomaticBackupState());
+      Alert.alert('自動バックアップを作成しました', '端末内へ安全に保存しました。');
+    } catch (backupError) {
+      setError(toErrorMessage(backupError));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function confirmRestoreLatestAutomaticBackup() {
+    Alert.alert(
+      '最新の自動バックアップへ戻しますか？',
+      '現在の読書データを最新の自動バックアップ時点へ置き換えます。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '復元する',
+          onPress: () => void restoreLatestAutoBackup(),
+        },
+      ],
+    );
+  }
+
+  async function restoreLatestAutoBackup() {
+    if (busyAction) return;
+    setBusyAction('auto-restore');
+    setError(null);
+    try {
+      const result = await restoreLatestAutomaticBackup();
+      await loadStatistics();
+      onDataRestored();
+      Alert.alert(
+        '復元が完了しました',
+        `${result.restoredRows.toLocaleString()}件を最新の自動バックアップから復元しました。`,
+      );
+    } catch (restoreError) {
+      setError(toErrorMessage(restoreError));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function shareLatestAutoBackup() {
+    if (busyAction) return;
+    setBusyAction('auto-share');
+    setError(null);
+    try {
+      await shareLatestAutomaticBackup();
+    } catch (shareError) {
+      setError(toErrorMessage(shareError));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function updateGoals(
+    dailyMinutes: number,
+    weeklyMinutes: number,
+  ) {
+    if (busyAction) return;
+    setBusyAction('goal');
+    setError(null);
+    try {
+      await setReadingGoals({ dailyMinutes, weeklyMinutes });
+      await loadStatistics();
+    } catch (goalError) {
+      setError(toErrorMessage(goalError));
     } finally {
       setBusyAction(null);
     }
@@ -216,6 +337,78 @@ export function ReadingInsightsView({
           styles={styles}
           value={`${statistics?.finishedNovels ?? 0}作品`}
         />
+        <SummaryCard
+          label="現在の連続読書"
+          styles={styles}
+          value={`${statistics?.currentStreakDays ?? 0}日`}
+        />
+        <SummaryCard
+          label="最長連続記録"
+          styles={styles}
+          value={`${statistics?.longestStreakDays ?? 0}日`}
+        />
+      </View>
+
+      <View style={styles.section}>
+        <View style={styles.sectionHeading}>
+          <Text style={styles.sectionTitle}>読書目標</Text>
+          <Text style={styles.sectionMeta}>タップで変更</Text>
+        </View>
+        <View style={styles.goalCard}>
+          <GoalProgress
+            currentMs={statistics?.todayDurationMs ?? 0}
+            label="今日"
+            targetMinutes={statistics?.dailyGoalMinutes ?? 20}
+            styles={styles}
+          />
+          <GoalProgress
+            currentMs={statistics?.last7DaysDurationMs ?? 0}
+            label="直近7日"
+            targetMinutes={statistics?.weeklyGoalMinutes ?? 120}
+            styles={styles}
+          />
+          <View style={styles.goalPresetSection}>
+            <Text style={styles.goalPresetLabel}>1日の目標</Text>
+            <View style={styles.goalPresetRow}>
+              {[15, 20, 30, 45, 60].map((minutes) => (
+                <GoalPreset
+                  active={(statistics?.dailyGoalMinutes ?? 20) === minutes}
+                  key={`daily-${minutes}`}
+                  label={`${minutes}分`}
+                  onPress={() =>
+                    void updateGoals(
+                      minutes,
+                      Math.max(
+                        minutes * 5,
+                        statistics?.weeklyGoalMinutes ?? 120,
+                      ),
+                    )
+                  }
+                  styles={styles}
+                />
+              ))}
+            </View>
+          </View>
+          <View style={styles.goalPresetSection}>
+            <Text style={styles.goalPresetLabel}>週間目標</Text>
+            <View style={styles.goalPresetRow}>
+              {[90, 120, 180, 240, 300, 420].map((minutes) => (
+                <GoalPreset
+                  active={(statistics?.weeklyGoalMinutes ?? 120) === minutes}
+                  key={`weekly-${minutes}`}
+                  label={formatGoalMinutes(minutes)}
+                  onPress={() =>
+                    void updateGoals(
+                      statistics?.dailyGoalMinutes ?? 20,
+                      minutes,
+                    )
+                  }
+                  styles={styles}
+                />
+              ))}
+            </View>
+          </View>
+        </View>
       </View>
 
       <View style={styles.section}>
@@ -301,10 +494,103 @@ export function ReadingInsightsView({
       </View>
 
       <View style={styles.section}>
+        <Text style={styles.sectionTitle}>よく読む作者</Text>
+        <View style={styles.aggregateCard}>
+          {(statistics?.topAuthors.length ?? 0) > 0 ? (
+            statistics?.topAuthors.map((author, index) => (
+              <View key={author.authorName} style={styles.aggregateRow}>
+                <Text style={styles.aggregateRank}>{index + 1}</Text>
+                <View style={styles.aggregateBody}>
+                  <Text numberOfLines={1} style={styles.aggregateTitle}>
+                    {author.authorName}
+                  </Text>
+                  <Text style={styles.aggregateMeta}>
+                    {author.works}作品 ・ {author.finishedWorks}作品読了
+                  </Text>
+                </View>
+                <Text style={styles.aggregateTime}>
+                  {formatDateTime(author.latestReadAt)}
+                </Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.emptyText}>読書履歴から作者別に集計します。</Text>
+          )}
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>よく読むタグ</Text>
+        <View style={styles.tagCloud}>
+          {(statistics?.topTags.length ?? 0) > 0 ? (
+            statistics?.topTags.map((tag) => (
+              <View key={tag.tagName} style={styles.aggregateTag}>
+                <Text style={styles.aggregateTagText}>#{tag.tagName}</Text>
+                <Text style={styles.aggregateTagCount}>{tag.works}作品</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.emptyText}>履歴に保存されたタグを集計します。</Text>
+          )}
+        </View>
+      </View>
+
+      <View style={styles.section}>
         <Text style={styles.sectionTitle}>バックアップと復元</Text>
         <Text style={styles.sectionDescription}>
-          読書履歴、本棚、しおり、オフライン本文、統計、表示設定をJSONファイルへ保存します。Pixivの認証情報は含みません。
+          読書履歴、本棚、しおり、ハイライト、ミュート、オフライン本文、統計、検索条件、表示設定をJSONファイルへ保存します。Pixivの認証情報は含みません。
         </Text>
+        <View style={styles.autoBackupCard}>
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityState={{ checked: automaticBackup?.enabled ?? false }}
+            disabled={busyAction !== null}
+            onPress={() => void toggleAutomaticBackup()}
+            style={({ pressed }) => [styles.autoBackupToggle, pressed && styles.pressed]}
+          >
+            <View style={styles.autoBackupTextArea}>
+              <Text style={styles.autoBackupTitle}>1日1回、自動バックアップ</Text>
+              <Text style={styles.autoBackupMeta}>
+                {automaticBackup?.latestCreatedAt
+                  ? `最新 ${formatDateTime(automaticBackup.latestCreatedAt)} ・ ${automaticBackup.backupCount}世代保存`
+                  : '有効化すると端末内へ最大7世代保存'}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.switchTrack,
+                automaticBackup?.enabled && styles.switchTrackActive,
+              ]}
+            >
+              <View
+                style={[
+                  styles.switchThumb,
+                  automaticBackup?.enabled && styles.switchThumbActive,
+                ]}
+              />
+            </View>
+          </Pressable>
+          <View style={styles.autoBackupActions}>
+            <SmallAction
+              disabled={busyAction !== null}
+              label="今すぐ作成"
+              onPress={() => void createAutoBackupNow()}
+              styles={styles}
+            />
+            <SmallAction
+              disabled={busyAction !== null || !automaticBackup?.latestUri}
+              label="最新を復元"
+              onPress={confirmRestoreLatestAutomaticBackup}
+              styles={styles}
+            />
+            <SmallAction
+              disabled={busyAction !== null || !automaticBackup?.latestUri}
+              label="最新を共有"
+              onPress={() => void shareLatestAutoBackup()}
+              styles={styles}
+            />
+          </View>
+        </View>
         <View style={styles.actionCard}>
           <InsightAction
             busy={busyAction === 'export'}
@@ -318,7 +604,7 @@ export function ReadingInsightsView({
             busy={busyAction === 'restore'}
             disabled={busyAction !== null}
             label="バックアップから復元"
-            onPress={confirmRestoreBackup}
+            onPress={() => void chooseBackupForRestore()}
             styles={styles}
           />
           <InsightAction
@@ -333,6 +619,76 @@ export function ReadingInsightsView({
       </View>
     </ScrollView>
   );
+}
+
+function GoalProgress({
+  currentMs,
+  label,
+  targetMinutes,
+  styles,
+}: {
+  currentMs: number;
+  label: string;
+  targetMinutes: number;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const targetMs = Math.max(1, targetMinutes * 60_000);
+  const progress = Math.min(1, Math.max(0, currentMs / targetMs));
+  return (
+    <View style={styles.goalProgressBlock}>
+      <View style={styles.goalProgressHeader}>
+        <Text style={styles.goalProgressLabel}>{label}</Text>
+        <Text style={styles.goalProgressValue}>
+          {formatReadingDuration(currentMs)} / {formatGoalMinutes(targetMinutes)}
+        </Text>
+      </View>
+      <View style={styles.goalTrack}>
+        <View style={[styles.goalValue, { width: `${progress * 100}%` }]} />
+      </View>
+      <Text style={styles.goalPercent}>{Math.round(progress * 100)}%</Text>
+    </View>
+  );
+}
+
+function GoalPreset({
+  active,
+  label,
+  onPress,
+  styles,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.goalPreset,
+        active && styles.goalPresetActive,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text
+        style={[
+          styles.goalPresetText,
+          active && styles.goalPresetTextActive,
+        ]}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function formatGoalMinutes(minutes: number): string {
+  if (minutes < 60) return `${minutes}分`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder > 0 ? `${hours}時間${remainder}分` : `${hours}時間`;
 }
 
 function SummaryCard({
@@ -399,6 +755,59 @@ function InsightAction({
       </Text>
     </Pressable>
   );
+}
+
+function SmallAction({
+  disabled,
+  label,
+  onPress,
+  styles,
+}: {
+  disabled: boolean;
+  label: string;
+  onPress: () => void;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.smallAction,
+        disabled && styles.disabled,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text style={styles.smallActionText}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function formatBackupPreview(preview: BackupPreviewSelection): string {
+  return [
+    preview.fileName,
+    `作成日時: ${new Date(preview.exportedAt).toLocaleString('ja-JP')}`,
+    `合計: ${preview.totalRows.toLocaleString()}件`,
+    '',
+    `読書履歴 ${preview.counts.history}件`,
+    `本棚 ${preview.counts.shelves}件`,
+    `しおり ${preview.counts.marks}件`,
+    `ハイライト ${preview.counts.highlights}件`,
+    `オフライン作品 ${preview.counts.offline}件`,
+    `読書セッション ${preview.counts.sessions}件`,
+    '',
+    '現在のデータはこの内容へ置き換わります。',
+  ].join('\n');
+}
+
+function formatDateTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString('ja-JP', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function formatDateLabel(value: string): string {
@@ -477,6 +886,46 @@ function createStyles(colors: AppColors) {
     sectionTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
     sectionMeta: { color: colors.textMuted, fontSize: 10, fontWeight: '700' },
     sectionDescription: { color: colors.textMuted, fontSize: 11, lineHeight: 18 },
+    goalCard: {
+      gap: 17,
+      padding: 15,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 16,
+      backgroundColor: colors.surface,
+    },
+    goalProgressBlock: { gap: 7 },
+    goalProgressHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+    },
+    goalProgressLabel: { color: colors.text, fontSize: 12, fontWeight: '900' },
+    goalProgressValue: { color: colors.textMuted, fontSize: 10, fontWeight: '700' },
+    goalTrack: {
+      height: 9,
+      overflow: 'hidden',
+      borderRadius: 999,
+      backgroundColor: colors.surfaceAlt,
+    },
+    goalValue: { height: '100%', borderRadius: 999, backgroundColor: colors.accent },
+    goalPercent: { color: colors.accentStrong, fontSize: 10, fontWeight: '900', textAlign: 'right' },
+    goalPresetSection: { gap: 8 },
+    goalPresetLabel: { color: colors.textMuted, fontSize: 10, fontWeight: '800' },
+    goalPresetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+    goalPreset: {
+      minHeight: 36,
+      justifyContent: 'center',
+      paddingHorizontal: 11,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 11,
+      backgroundColor: colors.surfaceAlt,
+    },
+    goalPresetActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+    goalPresetText: { color: colors.textMuted, fontSize: 10, fontWeight: '800' },
+    goalPresetTextActive: { color: colors.accentStrong },
     chartCard: {
       gap: 11,
       padding: 15,
@@ -565,6 +1014,104 @@ function createStyles(colors: AppColors) {
       lineHeight: 18,
       textAlign: 'center',
     },
+    aggregateCard: {
+      overflow: 'hidden',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 16,
+      backgroundColor: colors.surface,
+    },
+    aggregateRow: {
+      minHeight: 60,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 11,
+      paddingHorizontal: 13,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    aggregateRank: {
+      width: 22,
+      color: colors.accentStrong,
+      fontSize: 13,
+      fontWeight: '900',
+      textAlign: 'center',
+    },
+    aggregateBody: { flex: 1, gap: 3 },
+    aggregateTitle: { color: colors.text, fontSize: 12, fontWeight: '900' },
+    aggregateMeta: { color: colors.textMuted, fontSize: 9 },
+    aggregateTime: { color: colors.textMuted, fontSize: 8, textAlign: 'right' },
+    tagCloud: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      padding: 13,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 16,
+      backgroundColor: colors.surface,
+    },
+    aggregateTag: {
+      gap: 2,
+      paddingHorizontal: 10,
+      paddingVertical: 7,
+      borderRadius: 11,
+      backgroundColor: colors.accentSoft,
+    },
+    aggregateTagText: { color: colors.accentStrong, fontSize: 10, fontWeight: '900' },
+    aggregateTagCount: { color: colors.textMuted, fontSize: 8 },
+    autoBackupCard: {
+      overflow: 'hidden',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 16,
+      backgroundColor: colors.surface,
+    },
+    autoBackupToggle: {
+      minHeight: 66,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingHorizontal: 14,
+    },
+    autoBackupTextArea: { flex: 1, gap: 3 },
+    autoBackupTitle: { color: colors.text, fontSize: 12, fontWeight: '900' },
+    autoBackupMeta: { color: colors.textMuted, fontSize: 10, lineHeight: 16 },
+    switchTrack: {
+      width: 44,
+      height: 26,
+      justifyContent: 'center',
+      paddingHorizontal: 3,
+      borderRadius: 13,
+      backgroundColor: colors.border,
+    },
+    switchTrackActive: { backgroundColor: colors.accent },
+    switchThumb: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: colors.surface,
+    },
+    switchThumbActive: { alignSelf: 'flex-end' },
+    autoBackupActions: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 7,
+      padding: 10,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+    },
+    smallAction: {
+      minHeight: 38,
+      flexGrow: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 10,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 11,
+    },
+    smallActionText: { color: colors.text, fontSize: 10, fontWeight: '800' },
     actionCard: {
       gap: 9,
       padding: 13,

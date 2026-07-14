@@ -8,6 +8,7 @@ import { type AppColors, useAppTheme } from '@/theme';
 
 interface NovelCardProps {
   novel: PixivNovelItem;
+  noticeLabel?: string;
   rank?: number;
   readingStatus?: NovelReadingStatus;
   onAuthorPress?: () => void;
@@ -19,6 +20,7 @@ interface NovelCardProps {
 
 export function NovelCard({
   novel,
+  noticeLabel,
   rank,
   readingStatus,
   onAuthorLongPress,
@@ -57,6 +59,11 @@ export function NovelCard({
       </View>
 
       <View style={styles.body}>
+        {noticeLabel ? (
+          <View style={styles.noticeBadge}>
+            <Text style={styles.noticeBadgeText}>{noticeLabel}</Text>
+          </View>
+        ) : null}
         <View style={styles.titleRow}>
           <Text numberOfLines={2} style={styles.title}>
             {novel.title}
@@ -216,6 +223,19 @@ function createStyles(colors: AppColors) {
       flex: 1,
       justifyContent: 'center',
       gap: 5,
+    },
+    noticeBadge: {
+      alignSelf: 'flex-start',
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 999,
+      backgroundColor: colors.accent,
+    },
+    noticeBadgeText: {
+      color: colors.onAccent,
+      fontSize: 8,
+      fontWeight: '900',
+      letterSpacing: 0.5,
     },
     titleRow: {
       flexDirection: 'row',

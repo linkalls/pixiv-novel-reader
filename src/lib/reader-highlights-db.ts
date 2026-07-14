@@ -27,7 +27,7 @@ export interface CreateReaderHighlightInput {
 
 let schemaPromise: Promise<void> | null = null;
 
-async function ensureSchema(): Promise<void> {
+export async function ensureReaderHighlightsStorage(): Promise<void> {
   const database = await getLibraryDatabase();
 
   if (!schemaPromise) {
@@ -64,7 +64,7 @@ async function ensureSchema(): Promise<void> {
 export async function createReaderHighlight(
   input: CreateReaderHighlightInput,
 ): Promise<ReaderHighlight> {
-  await ensureSchema();
+  await ensureReaderHighlightsStorage();
   const database = await getLibraryDatabase();
   const now = Date.now();
   const excerpt = normalizeExcerpt(input.excerpt);
@@ -116,7 +116,7 @@ export async function createReaderHighlight(
 export async function listReaderHighlights(
   novelId?: number,
 ): Promise<ReaderHighlight[]> {
-  await ensureSchema();
+  await ensureReaderHighlightsStorage();
   const database = await getLibraryDatabase();
   const rows = novelId
     ? await database.getAllAsync<HighlightRow>(
@@ -136,7 +136,7 @@ export async function listReaderHighlights(
 }
 
 export async function deleteReaderHighlight(id: number): Promise<void> {
-  await ensureSchema();
+  await ensureReaderHighlightsStorage();
   const database = await getLibraryDatabase();
   await database.runAsync('DELETE FROM reader_highlights WHERE id = ?', id);
 }

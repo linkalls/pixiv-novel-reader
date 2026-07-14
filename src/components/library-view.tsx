@@ -1,3 +1,4 @@
+import type { PixivNovelItem } from '@book000/pixivts';
 import { Image } from 'expo-image';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
@@ -37,16 +38,44 @@ import {
   listBookshelfNovels,
   listBookshelves,
   listReaderMarks,
+  moveBookshelfNovel,
   removeNovelFromBookshelf,
   renameBookshelf,
+  setNovelInBookshelf,
   type Bookshelf,
   type ReaderMark,
 } from '@/lib/organizer-db';
-import { getOfflineAssetStorageSummary } from '@/lib/offline-assets';
+import {
+  listContentMutes,
+  removeContentMute,
+  type ContentMute,
+} from '@/lib/content-preferences-db';
+import {
+  deleteReaderHighlight,
+  listReaderHighlights,
+  type ReaderHighlight,
+} from '@/lib/reader-highlights-db';
+import {
+  enqueueOfflineDownloads,
+  processOfflineDownloadQueue,
+} from '@/lib/offline-download-queue';
+import { fetchNovelDetail } from '@/lib/pixiv';
+import {
+  getOfflineAssetStorageSummary,
+  getOfflineNovelAssetStorageSummary,
+} from '@/lib/offline-assets';
+import { OfflineDownloadManager } from '@/components/offline-download-manager';
 import { ReadingInsightsView } from '@/components/reading-insights-view';
 import { type AppColors, useAppTheme } from '@/theme';
 
-type LibraryMode = 'history' | 'shelves' | 'marks' | 'offline' | 'stats';
+type LibraryMode =
+  | 'history'
+  | 'shelves'
+  | 'marks'
+  | 'highlights'
+  | 'offline'
+  | 'mutes'
+  | 'stats';
 type ShelfEditorMode = 'create' | 'rename';
 
 interface LibraryViewProps {
@@ -55,6 +84,7 @@ interface LibraryViewProps {
     novelId: number,
     resume: boolean,
     scrollOffset?: number,
+    blockIndex?: number,
   ) => void;
   onTagPress: (tagName: string) => void;
 }
@@ -82,6 +112,8 @@ export function LibraryView({
   const [mode, setMode] = useState<LibraryMode>('history');
   const [items, setItems] = useState<LibraryNovel[]>([]);
   const [marks, setMarks] = useState<ReaderMark[]>([]);
+  const [highlights, setHighlights] = useState<ReaderHighlight[]>([]);
+  const [contentMutes, setContentMutes] = useState<ContentMute[]>([]);
   const [shelves, setShelves] = useState<Bookshelf[]>([]);
   const [selectedShelfId, setSelectedShelfId] = useState<number | null>(null);
   const [historyQuery, setHistoryQuery] = useState('');
@@ -101,7 +133,11 @@ export function LibraryView({
   );
   const [offlineAssetBytes, setOfflineAssetBytes] = useState(0);
   const [offlineAssetFiles, setOfflineAssetFiles] = useState(0);
+  const [offlineNovelSizes, setOfflineNovelSizes] = useState<Record<number, number>>(
+    {},
+  );
   const [isBatchBusy, setIsBatchBusy] = useState(false);
+  const [isBulkShelfVisible, setIsBulkShelfVisible] = useState(false);
 
   const selectedShelf = shelves.find((shelf) => shelf.id === selectedShelfId);
   const isSelectionMode = selectedNovelIds.size > 0;
@@ -135,6 +171,8 @@ export function LibraryView({
           }),
         );
         setMarks([]);
+        setHighlights([]);
+        setContentMutes([]);
         return;
       }
 
@@ -146,12 +184,47 @@ export function LibraryView({
         setItems(offlineItems);
         setOfflineAssetBytes(storage.assetBytes);
         setOfflineAssetFiles(storage.assetFiles);
+        const sizeEntries = await Promise.all(
+          offlineItems.map(async (item) => {
+            const assetStorage = await getOfflineNovelAssetStorageSummary(
+              item.novelId,
+            );
+            // 本文・作品情報はSQLite内なので、JSON文字数から概算する。
+            const databaseBytes =
+              (JSON.stringify(item).length + item.textLength) * 2;
+            return [
+              item.novelId,
+              assetStorage.assetBytes + databaseBytes,
+            ] as const;
+          }),
+        );
+        setOfflineNovelSizes(Object.fromEntries(sizeEntries));
         setMarks([]);
+        setHighlights([]);
+        setContentMutes([]);
         return;
       }
 
       if (mode === 'marks') {
         setMarks(await listReaderMarks());
+        setHighlights([]);
+        setContentMutes([]);
+        setItems([]);
+        return;
+      }
+
+      if (mode === 'highlights') {
+        setHighlights(await listReaderHighlights());
+        setMarks([]);
+        setContentMutes([]);
+        setItems([]);
+        return;
+      }
+
+      if (mode === 'mutes') {
+        setContentMutes(await listContentMutes());
+        setMarks([]);
+        setHighlights([]);
         setItems([]);
         return;
       }
@@ -159,6 +232,8 @@ export function LibraryView({
       if (mode === 'stats') {
         setItems([]);
         setMarks([]);
+        setHighlights([]);
+        setContentMutes([]);
         return;
       }
 
@@ -171,6 +246,8 @@ export function LibraryView({
       setShelves(nextShelves);
       setSelectedShelfId(nextSelectedShelfId);
       setMarks([]);
+      setHighlights([]);
+      setContentMutes([]);
       setItems(
         nextSelectedShelfId
           ? await listBookshelfNovels(nextSelectedShelfId)
@@ -197,6 +274,91 @@ export function LibraryView({
   async function removeHistory(novelId: number) {
     await deleteReadingHistory(novelId);
     await loadItems();
+  }
+
+  async function fetchSelectedNovelDetails() {
+    const ids = [...selectedNovelIds];
+    const details: PixivNovelItem[] = [];
+    const failedIds: number[] = [];
+    for (let offset = 0; offset < ids.length; offset += 4) {
+      const batch = ids.slice(offset, offset + 4);
+      const results = await Promise.allSettled(
+        batch.map((novelId) => fetchNovelDetail(novelId)),
+      );
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') details.push(result.value);
+        else failedIds.push(batch[index]);
+      });
+    }
+    return { details, failedIds };
+  }
+
+  async function saveSelectedOffline() {
+    if (isBatchBusy || selectedNovelIds.size === 0) return;
+    setIsBatchBusy(true);
+    setErrorMessage(null);
+    try {
+      const { details, failedIds } = await fetchSelectedNovelDetails();
+      const queued = await enqueueOfflineDownloads(details);
+      const result = await processOfflineDownloadQueue();
+      Alert.alert(
+        '一括保存を開始しました',
+        result.blockedByWifi
+          ? `${queued}作品をキューへ追加しました。Wi-Fi接続時に自動で保存します。`
+          : `${result.completed}作品を保存、${result.failed + failedIds.length}作品が失敗しました。`,
+      );
+      setSelectedNovelIds(new Set());
+      await loadItems();
+    } catch (error) {
+      setErrorMessage(toErrorMessage(error));
+    } finally {
+      setIsBatchBusy(false);
+    }
+  }
+
+  async function openBulkShelfPicker() {
+    if (isBatchBusy || selectedNovelIds.size === 0) return;
+    setIsBatchBusy(true);
+    try {
+      setShelves(await listBookshelves());
+      setIsBulkShelfVisible(true);
+    } catch (error) {
+      setErrorMessage(toErrorMessage(error));
+    } finally {
+      setIsBatchBusy(false);
+    }
+  }
+
+  async function moveSelectedToShelf(targetShelfId: number) {
+    if (isBatchBusy) return;
+    setIsBatchBusy(true);
+    setErrorMessage(null);
+    try {
+      const { details, failedIds } = await fetchSelectedNovelDetails();
+      for (const detail of details) {
+        await setNovelInBookshelf(targetShelfId, detail, true);
+        if (
+          mode === 'shelves' &&
+          selectedShelfId &&
+          selectedShelfId !== targetShelfId
+        ) {
+          await removeNovelFromBookshelf(selectedShelfId, detail.id);
+        }
+      }
+      setIsBulkShelfVisible(false);
+      setSelectedNovelIds(new Set());
+      await loadItems();
+      Alert.alert(
+        mode === 'shelves' ? '本棚へ移動しました' : '本棚へ追加しました',
+        `${details.length}作品を反映しました。${
+          failedIds.length > 0 ? `${failedIds.length}作品は取得に失敗しました。` : ''
+        }`,
+      );
+    } catch (error) {
+      setErrorMessage(toErrorMessage(error));
+    } finally {
+      setIsBatchBusy(false);
+    }
   }
 
   async function runBatchAction(action: 'remove' | 'finished' | 'unread') {
@@ -253,8 +415,27 @@ export function LibraryView({
     await loadItems();
   }
 
+  async function moveInShelf(
+    novelId: number,
+    direction: 'up' | 'down',
+  ) {
+    if (!selectedShelfId) return;
+    await moveBookshelfNovel(selectedShelfId, novelId, direction);
+    await loadItems();
+  }
+
   async function removeMark(markId: number) {
     await deleteReaderMark(markId);
+    await loadItems();
+  }
+
+  async function removeHighlight(highlightId: number) {
+    await deleteReaderHighlight(highlightId);
+    await loadItems();
+  }
+
+  async function unmuteContent(mute: ContentMute) {
+    await removeContentMute(mute.kind, mute.value);
     await loadItems();
   }
 
@@ -345,7 +526,11 @@ export function LibraryView({
 
   return (
     <View style={styles.container}>
-      <View style={styles.modeTabs}>
+      <ScrollView
+        contentContainerStyle={styles.modeTabs}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+      >
         <LibraryModeButton
           active={mode === 'history'}
           label="履歴"
@@ -362,16 +547,26 @@ export function LibraryView({
           onPress={() => changeMode('marks')}
         />
         <LibraryModeButton
+          active={mode === 'highlights'}
+          label="引用"
+          onPress={() => changeMode('highlights')}
+        />
+        <LibraryModeButton
           active={mode === 'offline'}
           label="オフライン"
           onPress={() => changeMode('offline')}
+        />
+        <LibraryModeButton
+          active={mode === 'mutes'}
+          label="ミュート"
+          onPress={() => changeMode('mutes')}
         />
         <LibraryModeButton
           active={mode === 'stats'}
           label="統計"
           onPress={() => changeMode('stats')}
         />
-      </View>
+      </ScrollView>
 
       {isSelectionMode ? (
         <View style={styles.batchToolbar}>
@@ -395,6 +590,32 @@ export function LibraryView({
             >
               <Text style={styles.batchSecondaryText}>すべて選択</Text>
             </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={isBatchBusy}
+              onPress={() => void openBulkShelfPicker()}
+              style={({ pressed }) => [
+                styles.batchSecondaryButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.batchSecondaryText}>
+                {mode === 'shelves' ? '本棚へ移動' : '本棚へ追加'}
+              </Text>
+            </Pressable>
+            {mode !== 'offline' ? (
+              <Pressable
+                accessibilityRole="button"
+                disabled={isBatchBusy}
+                onPress={() => void saveSelectedOffline()}
+                style={({ pressed }) => [
+                  styles.batchSecondaryButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.batchSecondaryText}>オフライン保存</Text>
+              </Pressable>
+            ) : null}
             {mode === 'history' ? (
               <>
                 <Pressable
@@ -425,6 +646,13 @@ export function LibraryView({
             </Pressable>
           </View>
         </View>
+      ) : null}
+
+      {mode === 'offline' && !isSelectionMode ? (
+        <OfflineDownloadManager
+          onChanged={() => void loadItems()}
+          visible={mode === 'offline'}
+        />
       ) : null}
 
       {mode === 'offline' && !isSelectionMode ? (
@@ -506,6 +734,70 @@ export function LibraryView({
             void loadItems();
           }}
         />
+      ) : mode === 'highlights' ? (
+        <FlatList
+          contentContainerStyle={styles.listContent}
+          data={highlights}
+          keyExtractor={(highlight) => `highlight-${highlight.id}`}
+          ListEmptyComponent={
+            <LibraryEmptyState
+              colors={colors}
+              isLoading={isLoading}
+              message={emptyMessage}
+              styles={styles}
+            />
+          }
+          refreshControl={
+            <RefreshControl
+              colors={[colors.accent]}
+              onRefresh={() => void loadItems()}
+              refreshing={isLoading && highlights.length > 0}
+              tintColor={colors.accent}
+            />
+          }
+          renderItem={({ item: highlight }) => (
+            <ReaderHighlightCard
+              highlight={highlight}
+              onDelete={() => void removeHighlight(highlight.id)}
+              onOpen={() =>
+                onOpenNovel(
+                  highlight.novelId,
+                  false,
+                  undefined,
+                  highlight.blockIndex,
+                )
+              }
+            />
+          )}
+        />
+      ) : mode === 'mutes' ? (
+        <FlatList
+          contentContainerStyle={styles.listContent}
+          data={contentMutes}
+          keyExtractor={(mute) => `${mute.kind}-${mute.value}`}
+          ListEmptyComponent={
+            <LibraryEmptyState
+              colors={colors}
+              isLoading={isLoading}
+              message={emptyMessage}
+              styles={styles}
+            />
+          }
+          refreshControl={
+            <RefreshControl
+              colors={[colors.accent]}
+              onRefresh={() => void loadItems()}
+              refreshing={isLoading && contentMutes.length > 0}
+              tintColor={colors.accent}
+            />
+          }
+          renderItem={({ item: mute }) => (
+            <ContentMuteCard
+              mute={mute}
+              onRestore={() => void unmuteContent(mute)}
+            />
+          )}
+        />
       ) : mode === 'marks' ? (
         <FlatList
           contentContainerStyle={styles.listContent}
@@ -572,16 +864,21 @@ export function LibraryView({
               tintColor={colors.accent}
             />
           }
-          renderItem={({ item }) => (
+          renderItem={({ item, index }) => (
             <LibraryNovelCard
               item={item}
               mode={mode}
               selected={selectedNovelIds.has(item.novelId)}
               selectionMode={isSelectionMode}
+              storageBytes={mode === 'offline' ? offlineNovelSizes[item.novelId] : undefined}
               onAuthor={() => onOpenAuthor(item.novelId)}
               onLongPress={() => toggleSelected(item.novelId)}
               onSelect={() => toggleSelected(item.novelId)}
               onTagPress={onTagPress}
+              canMoveDown={mode === 'shelves' && index < items.length - 1}
+              canMoveUp={mode === 'shelves' && index > 0}
+              onMoveDown={() => void moveInShelf(item.novelId, 'down')}
+              onMoveUp={() => void moveInShelf(item.novelId, 'up')}
               onOpen={() => {
                 if (isSelectionMode) {
                   toggleSelected(item.novelId);
@@ -602,6 +899,73 @@ export function LibraryView({
           )}
         />
       )}
+
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setIsBulkShelfVisible(false)}
+        transparent
+        visible={isBulkShelfVisible}
+      >
+        <Pressable
+          onPress={() => setIsBulkShelfVisible(false)}
+          style={styles.modalBackdrop}
+        >
+          <Pressable onPress={() => {}} style={styles.bulkShelfModal}>
+            <Text style={styles.editorTitle}>
+              {mode === 'shelves' ? '移動先の本棚' : '追加先の本棚'}
+            </Text>
+            <Text style={styles.bulkShelfDescription}>
+              {selectedNovelIds.size}作品をまとめて反映します。
+            </Text>
+            <ScrollView
+              contentContainerStyle={styles.bulkShelfList}
+              showsVerticalScrollIndicator={false}
+            >
+              {shelves.map((shelf) => (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={
+                    isBatchBusy ||
+                    (mode === 'shelves' && shelf.id === selectedShelfId)
+                  }
+                  key={shelf.id}
+                  onPress={() => void moveSelectedToShelf(shelf.id)}
+                  style={({ pressed }) => [
+                    styles.bulkShelfRow,
+                    mode === 'shelves' &&
+                      shelf.id === selectedShelfId &&
+                      styles.disabled,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View style={styles.bulkShelfBody}>
+                    <Text numberOfLines={1} style={styles.bulkShelfName}>
+                      {shelf.name}
+                    </Text>
+                    <Text style={styles.bulkShelfCount}>{shelf.itemCount}作品</Text>
+                  </View>
+                  <Text style={styles.bulkShelfArrow}>›</Text>
+                </Pressable>
+              ))}
+              {shelves.length === 0 ? (
+                <Text style={styles.emptyText}>
+                  本棚がありません。先に「本棚」タブから作成してください。
+                </Text>
+              ) : null}
+            </ScrollView>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setIsBulkShelfVisible(false)}
+              style={({ pressed }) => [
+                styles.cancelButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.cancelText}>キャンセル</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal
         animationType="fade"
@@ -837,27 +1201,37 @@ function FilterChip({
 }
 
 function LibraryNovelCard({
+  canMoveDown,
+  canMoveUp,
   item,
   mode,
   onAuthor,
   onLongPress,
+  onMoveDown,
+  onMoveUp,
   onOpen,
   onRemove,
   onSelect,
   onTagPress,
   selected,
   selectionMode,
+  storageBytes,
 }: {
+  canMoveDown: boolean;
+  canMoveUp: boolean;
   item: LibraryNovel;
   mode: LibraryMode;
   onAuthor: () => void;
   onLongPress: () => void;
+  onMoveDown: () => void;
+  onMoveUp: () => void;
   onOpen: () => void;
   onRemove?: () => void;
   onSelect: () => void;
   onTagPress: (tagName: string) => void;
   selected: boolean;
   selectionMode: boolean;
+  storageBytes?: number;
 }) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -951,8 +1325,17 @@ function LibraryNovelCard({
             </View>
           ) : null}
           <Text style={styles.meta}>
-            {item.textLength.toLocaleString()}字 ・ {formatRelativeTime(item.lastReadAt)}
+            {item.textLength.toLocaleString()}字 ・ {
+              item.isFinished && item.finishedAt
+                ? `読了 ${formatRelativeTime(item.finishedAt)}`
+                : formatRelativeTime(item.lastReadAt)
+            }
           </Text>
+          {storageBytes !== undefined ? (
+            <Text style={styles.storageSizeText}>
+              保存容量 約{formatBytes(storageBytes)}
+            </Text>
+          ) : null}
           <View style={styles.progressRow}>
             <View style={styles.progressTrack}>
               <View
@@ -973,7 +1356,48 @@ function LibraryNovelCard({
           </Text>
         </View>
       </Pressable>
-      {onRemove ? (
+      {mode === 'shelves' ? (
+        <View style={styles.shelfOrderActions}>
+          <Pressable
+            accessibilityLabel="本棚内で上へ移動"
+            accessibilityRole="button"
+            disabled={!canMoveUp}
+            onPress={onMoveUp}
+            style={({ pressed }) => [
+              styles.shelfOrderButton,
+              !canMoveUp && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.shelfOrderText}>↑ 上へ</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="本棚内で下へ移動"
+            accessibilityRole="button"
+            disabled={!canMoveDown}
+            onPress={onMoveDown}
+            style={({ pressed }) => [
+              styles.shelfOrderButton,
+              !canMoveDown && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.shelfOrderText}>↓ 下へ</Text>
+          </Pressable>
+          {onRemove ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={onRemove}
+              style={({ pressed }) => [
+                styles.shelfRemoveButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.removeButtonText}>本棚から外す</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : onRemove ? (
         <Pressable
           accessibilityRole="button"
           onPress={onRemove}
@@ -983,14 +1407,116 @@ function LibraryNovelCard({
           ]}
         >
           <Text style={styles.removeButtonText}>
-            {mode === 'offline'
-              ? '保存を削除'
-              : mode === 'history'
-                ? '履歴から削除'
-                : '本棚から外す'}
+            {mode === 'offline' ? '保存を削除' : '履歴から削除'}
           </Text>
         </Pressable>
       ) : null}
+    </View>
+  );
+}
+
+function ReaderHighlightCard({
+  highlight,
+  onDelete,
+  onOpen,
+}: {
+  highlight: ReaderHighlight;
+  onDelete: () => void;
+  onOpen: () => void;
+}) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const color =
+    highlight.color === 'blue'
+      ? '#70B7FF'
+      : highlight.color === 'pink'
+        ? '#FF91B8'
+        : highlight.color === 'green'
+          ? '#72D69B'
+          : '#F5D547';
+
+  return (
+    <View style={styles.highlightCard}>
+      <View style={[styles.highlightBar, { backgroundColor: color }]} />
+      <Pressable
+        accessibilityRole="button"
+        onPress={onOpen}
+        style={({ pressed }) => [
+          styles.highlightMain,
+          pressed && styles.pressed,
+        ]}
+      >
+        <Text numberOfLines={1} style={styles.cardTitle}>
+          {highlight.title}
+        </Text>
+        <Text numberOfLines={1} style={styles.author}>
+          {highlight.authorName}
+        </Text>
+        <Text numberOfLines={5} style={styles.highlightExcerpt}>
+          「{highlight.excerpt}」
+        </Text>
+        {highlight.note ? (
+          <Text numberOfLines={3} style={styles.markNote}>
+            📝 {highlight.note}
+          </Text>
+        ) : null}
+        <View style={styles.highlightFooter}>
+          <Text style={styles.meta}>
+            {formatRelativeTime(highlight.updatedAt)}
+          </Text>
+          <Text style={styles.openLabel}>引用位置から読む　›</Text>
+        </View>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onDelete}
+        style={({ pressed }) => [
+          styles.removeButton,
+          pressed && styles.pressed,
+        ]}
+      >
+        <Text style={styles.removeButtonText}>ハイライトを削除</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function ContentMuteCard({
+  mute,
+  onRestore,
+}: {
+  mute: ContentMute;
+  onRestore: () => void;
+}) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  return (
+    <View style={styles.muteCard}>
+      <View style={styles.muteIcon}>
+        <Text style={styles.muteIconText}>
+          {mute.kind === 'author' ? '人' : '#'}
+        </Text>
+      </View>
+      <View style={styles.muteBody}>
+        <Text numberOfLines={2} style={styles.muteLabel}>
+          {mute.label}
+        </Text>
+        <Text style={styles.meta}>
+          {mute.kind === 'author' ? '作者をミュート中' : 'タグをミュート中'}
+          　・　{formatRelativeTime(mute.createdAt)}
+        </Text>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onRestore}
+        style={({ pressed }) => [
+          styles.restoreMuteButton,
+          pressed && styles.pressed,
+        ]}
+      >
+        <Text style={styles.restoreMuteText}>解除</Text>
+      </Pressable>
     </View>
   );
 }
@@ -1083,6 +1609,20 @@ function getEmptyMessage(
       description: '読書画面の「…」から現在位置を保存できます。',
     };
   }
+  if (mode === 'highlights') {
+    return {
+      icon: '✍',
+      title: '保存した引用はありません',
+      description: '本文を長押しすると、色とメモ付きで保存できます。',
+    };
+  }
+  if (mode === 'mutes') {
+    return {
+      icon: '◎',
+      title: 'ミュート中の作者・タグはありません',
+      description: '作品カードの作者名やタグを長押しするとミュートできます。',
+    };
+  }
   return {
     icon: '📚',
     title: `「${shelfName ?? '本棚'}」は空です`,
@@ -1119,18 +1659,14 @@ function createStyles(colors: AppColors) {
   return StyleSheet.create({
     container: { flex: 1 },
     modeTabs: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      gap: 10,
+      gap: 9,
       paddingHorizontal: 16,
       paddingTop: 16,
       paddingBottom: 16,
     },
     modeButton: {
-      flexGrow: 1,
-      flexBasis: '30%',
-      minWidth: 0,
-      minHeight: 48,
+      minWidth: 76,
+      minHeight: 44,
       alignItems: 'center',
       justifyContent: 'center',
       paddingHorizontal: 12,
@@ -1364,6 +1900,7 @@ function createStyles(colors: AppColors) {
       fontWeight: '700',
     },
     meta: { color: colors.textMuted, fontSize: 10, lineHeight: 16 },
+    storageSizeText: { color: colors.accentStrong, fontSize: 9, fontWeight: '800' },
     progressRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1392,8 +1929,91 @@ function createStyles(colors: AppColors) {
       fontWeight: '800',
       textAlign: 'right',
     },
+    shelfOrderActions: {
+      flexDirection: 'row',
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+    },
+    shelfOrderButton: {
+      minHeight: 42,
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRightWidth: StyleSheet.hairlineWidth,
+      borderRightColor: colors.border,
+    },
+    shelfOrderText: { color: colors.accentStrong, fontSize: 11, fontWeight: '800' },
+    shelfRemoveButton: {
+      minHeight: 42,
+      flex: 1.2,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     removeButton: { minHeight: 42, alignItems: 'center', justifyContent: 'center', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
     removeButtonText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
+    highlightCard: {
+      overflow: 'hidden',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 18,
+      backgroundColor: colors.surface,
+    },
+    highlightBar: { height: 5 },
+    highlightMain: { gap: 7, padding: 15 },
+    highlightExcerpt: {
+      color: colors.text,
+      fontSize: 13,
+      lineHeight: 21,
+    },
+    highlightFooter: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+    },
+    muteCard: {
+      minHeight: 78,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      padding: 13,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 16,
+      backgroundColor: colors.surface,
+    },
+    muteIcon: {
+      width: 40,
+      height: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 20,
+      backgroundColor: colors.surfaceAlt,
+    },
+    muteIconText: {
+      color: colors.accentStrong,
+      fontSize: 16,
+      fontWeight: '900',
+    },
+    muteBody: { flex: 1, gap: 5 },
+    muteLabel: {
+      color: colors.text,
+      fontSize: 13,
+      fontWeight: '900',
+    },
+    restoreMuteButton: {
+      minHeight: 38,
+      justifyContent: 'center',
+      paddingHorizontal: 13,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.accent,
+      borderRadius: 12,
+    },
+    restoreMuteText: {
+      color: colors.accentStrong,
+      fontSize: 11,
+      fontWeight: '900',
+    },
     markCard: { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 18, backgroundColor: colors.surface },
     markMain: { gap: 6, padding: 14 },
     markHeading: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
@@ -1406,6 +2026,32 @@ function createStyles(colors: AppColors) {
     emptyText: { color: colors.textMuted, fontSize: 12, lineHeight: 19, textAlign: 'center' },
     keyboardAvoider: { flex: 1 },
     modalBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.overlay },
+    bulkShelfModal: {
+      width: '100%',
+      maxWidth: 460,
+      maxHeight: '78%',
+      gap: 12,
+      padding: 18,
+      borderRadius: 19,
+      backgroundColor: colors.surface,
+    },
+    bulkShelfDescription: { color: colors.textMuted, fontSize: 11, lineHeight: 17 },
+    bulkShelfList: { gap: 8 },
+    bulkShelfRow: {
+      minHeight: 56,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 13,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 13,
+      backgroundColor: colors.surfaceAlt,
+    },
+    bulkShelfBody: { flex: 1, gap: 3 },
+    bulkShelfName: { color: colors.text, fontSize: 12, fontWeight: '900' },
+    bulkShelfCount: { color: colors.textMuted, fontSize: 9 },
+    bulkShelfArrow: { color: colors.accentStrong, fontSize: 22, fontWeight: '900' },
     editorModal: { width: '100%', maxWidth: 460, gap: 14, padding: 20, borderRadius: 18, backgroundColor: colors.surface },
     editorTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
     editorInput: { minHeight: 48, paddingHorizontal: 13, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 13, color: colors.text, backgroundColor: colors.input, fontSize: 14 },

@@ -18,11 +18,13 @@ interface NovelSeriesModalProps {
   currentNovelId: number;
   error: string | null;
   isLoading: boolean;
+  isAutoSaveEnabled: boolean;
   isDownloading: boolean;
   downloadProgress: string | null;
   muted: string;
   novels: PixivNovelItem[];
   readingStatuses: Record<number, NovelReadingStatus>;
+  onAutoSaveChange: (enabled: boolean) => void;
   onClose: () => void;
   onDownloadAll: () => void;
   onNovelPress: (novel: PixivNovelItem) => void;
@@ -41,11 +43,13 @@ export function NovelSeriesModal({
   currentNovelId,
   error,
   isLoading,
+  isAutoSaveEnabled,
   isDownloading,
   downloadProgress,
   muted,
   novels,
   readingStatuses,
+  onAutoSaveChange,
   onClose,
   onDownloadAll,
   onNovelPress,
@@ -122,6 +126,37 @@ export function NovelSeriesModal({
               <Text style={styles.seriesCompleteText}>シリーズを全話読了済み</Text>
             </View>
           ) : null}
+
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityState={{ checked: isAutoSaveEnabled }}
+            disabled={isLoading || novels.length === 0}
+            onPress={() => onAutoSaveChange(!isAutoSaveEnabled)}
+            style={({ pressed }) => [
+              styles.autoSaveRow,
+              pressed && styles.pressed,
+            ]}
+          >
+            <View style={styles.autoSaveTextArea}>
+              <Text style={styles.autoSaveTitle}>新話を自動保存</Text>
+              <Text style={styles.autoSaveDescription}>
+                起動時とアプリ復帰時に新しい話を確認し、保存キューへ追加します。
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.switchTrack,
+                isAutoSaveEnabled && styles.switchTrackActive,
+              ]}
+            >
+              <View
+                style={[
+                  styles.switchThumb,
+                  isAutoSaveEnabled && styles.switchThumbActive,
+                ]}
+              />
+            </View>
+          </Pressable>
 
           <Pressable
             accessibilityRole="button"
@@ -353,6 +388,37 @@ function createStyles(colors: {
       backgroundColor: `${colors.accent}12`,
     },
     seriesCompleteText: { color: colors.accent, fontSize: 12, fontWeight: '900' },
+    autoSaveRow: {
+      minHeight: 64,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      marginTop: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 14,
+    },
+    autoSaveTextArea: { flex: 1, gap: 3 },
+    autoSaveTitle: { color: colors.text, fontSize: 12, fontWeight: '900' },
+    autoSaveDescription: { color: colors.muted, fontSize: 9, lineHeight: 15 },
+    switchTrack: {
+      width: 44,
+      height: 26,
+      justifyContent: 'center',
+      paddingHorizontal: 3,
+      borderRadius: 13,
+      backgroundColor: colors.border,
+    },
+    switchTrackActive: { backgroundColor: colors.accent },
+    switchThumb: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: colors.background,
+    },
+    switchThumbActive: { alignSelf: 'flex-end' },
     downloadButton: {
       minHeight: 58,
       flexDirection: 'row',

@@ -16,6 +16,7 @@ export interface Bookshelf {
 export interface BookshelfNovel extends LibraryNovel {
   addedAt: number;
   shelfId: number;
+  sortOrder: number;
 }
 
 export interface ReaderMark {
@@ -60,6 +61,7 @@ interface BookshelfItemRow {
   shelf_id: number;
   detail_json: string;
   added_at: number;
+  sort_order: number;
   progress: number | null;
   scroll_offset: number | null;
   is_finished: number | null;
@@ -110,6 +112,7 @@ async function getOrganizerDatabase(): Promise<SQLiteDatabase> {
           novel_id INTEGER NOT NULL,
           detail_json TEXT NOT NULL,
           added_at INTEGER NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0,
           PRIMARY KEY (shelf_id, novel_id),
           FOREIGN KEY (shelf_id) REFERENCES bookshelves(id) ON DELETE CASCADE
         );
@@ -138,6 +141,8 @@ async function getOrganizerDatabase(): Promise<SQLiteDatabase> {
 
         CREATE INDEX IF NOT EXISTS bookshelf_items_added_at_idx
           ON bookshelf_items(shelf_id, added_at DESC);
+        CREATE INDEX IF NOT EXISTS bookshelf_items_order_idx
+          ON bookshelf_items(shelf_id, sort_order ASC);
         CREATE INDEX IF NOT EXISTS reader_marks_novel_idx
           ON reader_marks(novel_id, updated_at DESC);
         CREATE INDEX IF NOT EXISTS reader_marks_updated_idx
@@ -159,7 +164,48 @@ async function getOrganizerDatabase(): Promise<SQLiteDatabase> {
   }
 
   await schemaPromise;
+  await ensureBookshelfItemSortOrderColumn(database);
   return database;
+}
+
+async function ensureBookshelfItemSortOrderColumn(
+  database: SQLiteDatabase,
+): Promise<void> {
+  const columns = await database.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(bookshelf_items)',
+  );
+  if (!columns.some((column) => column.name === 'sort_order')) {
+    await database.execAsync(
+      'ALTER TABLE bookshelf_items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0',
+    );
+  }
+
+  const shelfIds = await database.getAllAsync<{ shelf_id: number }>(`
+    SELECT DISTINCT shelf_id FROM bookshelf_items
+  `);
+  for (const { shelf_id: shelfId } of shelfIds) {
+    const rows = await database.getAllAsync<{ novel_id: number }>(
+      `
+        SELECT novel_id
+        FROM bookshelf_items
+        WHERE shelf_id = ?
+        ORDER BY
+          CASE WHEN sort_order = 0 THEN 1 ELSE 0 END,
+          sort_order ASC,
+          added_at DESC,
+          novel_id ASC
+      `,
+      shelfId,
+    );
+    for (let index = 0; index < rows.length; index += 1) {
+      await database.runAsync(
+        `UPDATE bookshelf_items SET sort_order = ? WHERE shelf_id = ? AND novel_id = ?`,
+        index,
+        shelfId,
+        rows[index].novel_id,
+      );
+    }
+  }
 }
 
 /** バックアップや統計画面から整理機能のスキーマを初期化する。 */
@@ -269,10 +315,19 @@ export async function setNovelInBookshelf(
     return;
   }
 
+  const nextOrderRow = await database.getFirstAsync<{ next_order: number }>(
+    `
+      SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+      FROM bookshelf_items
+      WHERE shelf_id = ?
+    `,
+    shelfId,
+  );
   await database.runAsync(
     `
-      INSERT INTO bookshelf_items (shelf_id, novel_id, detail_json, added_at)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO bookshelf_items (
+        shelf_id, novel_id, detail_json, added_at, sort_order
+      ) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(shelf_id, novel_id) DO UPDATE SET
         detail_json = excluded.detail_json,
         added_at = excluded.added_at
@@ -281,6 +336,7 @@ export async function setNovelInBookshelf(
     detail.id,
     JSON.stringify(detail),
     Date.now(),
+    nextOrderRow?.next_order ?? 0,
   );
 }
 
@@ -296,6 +352,46 @@ export async function removeNovelFromBookshelf(
   );
 }
 
+export async function moveBookshelfNovel(
+  shelfId: number,
+  novelId: number,
+  direction: 'up' | 'down',
+): Promise<void> {
+  const database = await getOrganizerDatabase();
+  await database.withTransactionAsync(async () => {
+    const rows = await database.getAllAsync<{
+      novel_id: number;
+      sort_order: number;
+    }>(
+      `
+        SELECT novel_id, sort_order
+        FROM bookshelf_items
+        WHERE shelf_id = ?
+        ORDER BY sort_order ASC, added_at DESC, novel_id ASC
+      `,
+      shelfId,
+    );
+    const index = rows.findIndex((row) => row.novel_id === novelId);
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (index < 0 || targetIndex < 0 || targetIndex >= rows.length) return;
+
+    const current = rows[index];
+    const target = rows[targetIndex];
+    await database.runAsync(
+      `UPDATE bookshelf_items SET sort_order = ? WHERE shelf_id = ? AND novel_id = ?`,
+      target.sort_order,
+      shelfId,
+      current.novel_id,
+    );
+    await database.runAsync(
+      `UPDATE bookshelf_items SET sort_order = ? WHERE shelf_id = ? AND novel_id = ?`,
+      current.sort_order,
+      shelfId,
+      target.novel_id,
+    );
+  });
+}
+
 export async function listBookshelfNovels(
   shelfId: number,
   limit = 300,
@@ -307,6 +403,7 @@ export async function listBookshelfNovels(
         i.shelf_id,
         i.detail_json,
         i.added_at,
+        i.sort_order,
         h.progress,
         h.scroll_offset,
         h.is_finished,
@@ -317,7 +414,7 @@ export async function listBookshelfNovels(
       LEFT JOIN reading_history h ON h.novel_id = i.novel_id
       LEFT JOIN offline_novels o ON o.novel_id = i.novel_id
       WHERE i.shelf_id = ?
-      ORDER BY i.added_at DESC
+      ORDER BY i.sort_order ASC, i.added_at DESC
       LIMIT ?
     `,
     shelfId,
@@ -332,6 +429,7 @@ export async function listBookshelfNovels(
         ...mapDetailToLibraryNovel(detail, row),
         shelfId: row.shelf_id,
         addedAt: row.added_at,
+        sortOrder: row.sort_order,
       });
     } catch {
       // 壊れた1件だけを除外する。
@@ -491,6 +589,8 @@ function mapDetailToLibraryNovel(
     progress: clampProgress(row.progress ?? 0),
     scrollOffset: Math.max(0, row.scroll_offset ?? 0),
     isFinished: row.is_finished === 1,
+    finishedAt:
+      row.is_finished === 1 ? (row.last_read_at ?? row.added_at) : null,
     lastReadAt: row.last_read_at ?? row.added_at,
     isOffline: row.is_offline === 1,
     savedAt: row.saved_at,

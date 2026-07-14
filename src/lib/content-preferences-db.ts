@@ -17,6 +17,7 @@ export interface AdvancedSearchFilters {
   minBookmarks: number | null;
   includeR18: boolean;
   includeAi: boolean;
+  dateRange: 'all' | 'week' | 'month' | 'year';
   seriesMode: 'all' | 'series' | 'standalone';
   hideFinished: boolean;
 }
@@ -27,13 +28,14 @@ const DEFAULT_SEARCH_FILTERS: AdvancedSearchFilters = {
   minBookmarks: null,
   includeR18: true,
   includeAi: true,
+  dateRange: 'all',
   seriesMode: 'all',
   hideFinished: false,
 };
 
 let schemaPromise: Promise<void> | null = null;
 
-async function ensureSchema(): Promise<void> {
+export async function ensureContentPreferencesStorage(): Promise<void> {
   const database = await getLibraryDatabase();
 
   if (!schemaPromise) {
@@ -66,7 +68,7 @@ async function ensureSchema(): Promise<void> {
 }
 
 export async function listContentMutes(): Promise<ContentMute[]> {
-  await ensureSchema();
+  await ensureContentPreferencesStorage();
   const database = await getLibraryDatabase();
   const rows = await database.getAllAsync<{
     kind: string;
@@ -116,7 +118,7 @@ export async function removeContentMute(
   kind: ContentMuteKind,
   value: string,
 ): Promise<void> {
-  await ensureSchema();
+  await ensureContentPreferencesStorage();
   const database = await getLibraryDatabase();
   await database.runAsync(
     'DELETE FROM content_mutes WHERE kind = ? AND value = ?',
@@ -148,7 +150,7 @@ export async function filterMutedNovels(
 }
 
 export async function getAdvancedSearchFilters(): Promise<AdvancedSearchFilters> {
-  await ensureSchema();
+  await ensureContentPreferencesStorage();
   const database = await getLibraryDatabase();
   const row = await database.getFirstAsync<{ value_json: string }>(
     'SELECT value_json FROM local_preferences WHERE key = ?',
@@ -169,7 +171,7 @@ export async function getAdvancedSearchFilters(): Promise<AdvancedSearchFilters>
 export async function saveAdvancedSearchFilters(
   filters: AdvancedSearchFilters,
 ): Promise<void> {
-  await ensureSchema();
+  await ensureContentPreferencesStorage();
   const database = await getLibraryDatabase();
   const normalized = normalizeSearchFilters(filters);
   await database.runAsync(
@@ -216,6 +218,18 @@ export function applyAdvancedSearchFilters(
     if (!filters.includeAi && novel.novelAiType > 0) {
       return false;
     }
+    if (filters.dateRange !== 'all') {
+      const ageMs = Date.now() - new Date(novel.createDate).getTime();
+      const maximumAgeMs =
+        filters.dateRange === 'week'
+          ? 7 * 86_400_000
+          : filters.dateRange === 'month'
+            ? 31 * 86_400_000
+            : 366 * 86_400_000;
+      if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > maximumAgeMs) {
+        return false;
+      }
+    }
     if (filters.seriesMode === 'series' && !novel.series) {
       return false;
     }
@@ -234,7 +248,7 @@ async function upsertMute(
   value: string,
   label: string,
 ): Promise<void> {
-  await ensureSchema();
+  await ensureContentPreferencesStorage();
   const database = await getLibraryDatabase();
   await database.runAsync(
     `
@@ -263,6 +277,12 @@ function normalizeSearchFilters(value: unknown): AdvancedSearchFilters {
     minBookmarks: normalizeNullableNonNegativeNumber(candidate.minBookmarks),
     includeR18: candidate.includeR18 !== false,
     includeAi: candidate.includeAi !== false,
+    dateRange:
+      candidate.dateRange === 'week' ||
+      candidate.dateRange === 'month' ||
+      candidate.dateRange === 'year'
+        ? candidate.dateRange
+        : 'all',
     seriesMode:
       candidate.seriesMode === 'series' || candidate.seriesMode === 'standalone'
         ? candidate.seriesMode

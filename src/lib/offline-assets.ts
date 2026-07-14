@@ -74,6 +74,20 @@ export async function localizeNovelImages(
   };
 }
 
+export async function getOfflineNovelAssetStorageSummary(
+  novelId: number,
+): Promise<OfflineStorageSummary> {
+  if (!documentDirectory) {
+    return { assetBytes: 0, assetFiles: 0 };
+  }
+  const directory = getNovelAssetDirectory(novelId);
+  const info = await getInfoAsync(directory).catch(() => null);
+  if (!info?.exists || !info.isDirectory) {
+    return { assetBytes: 0, assetFiles: 0 };
+  }
+  return readDirectorySize(directory);
+}
+
 export async function getOfflineAssetStorageSummary(): Promise<OfflineStorageSummary> {
   if (!documentDirectory) {
     return { assetBytes: 0, assetFiles: 0 };

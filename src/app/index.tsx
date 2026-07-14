@@ -1,9 +1,11 @@
 import type { PixivNovelItem } from '@book000/pixivts';
+import * as Linking from 'expo-linking';
 import * as SecureStore from 'expo-secure-store';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Alert,
   FlatList,
   KeyboardAvoidingView,
@@ -38,6 +40,21 @@ import {
   saveAdvancedSearchFilters,
   type AdvancedSearchFilters,
 } from '@/lib/content-preferences-db';
+import {
+  checkForAppUpdate,
+  CURRENT_RELEASE_HIGHLIGHTS,
+  getCurrentAppVersion,
+  getReleasesUrl,
+  markUpdateNotified,
+  type AppUpdateInfo,
+} from '@/lib/app-update';
+import {
+  isNewContentNotificationEnabled,
+  notifyNewContent,
+  setNewContentNotificationEnabled,
+} from '@/lib/app-notifications';
+import { processOfflineDownloadQueue } from '@/lib/offline-download-queue';
+import { syncOfflineSeriesSubscriptions } from '@/lib/offline-series-subscriptions';
 import { subscribeNovelChanged } from '@/lib/novel-events';
 import { cacheNovelForRoute } from '@/lib/novel-route-cache';
 import {
@@ -66,6 +83,7 @@ import {
 import { type AppColors, type ThemeMode, useAppTheme } from '@/theme';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
+const FOLLOWING_NEWEST_AT_KEY = 'following-feed-newest-at';
 
 type AppTab =
   | 'recommended'
@@ -174,6 +192,10 @@ export default function HomeScreen() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoginVisible, setIsLoginVisible] = useState(false);
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
+  const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isNewContentNotificationOn, setIsNewContentNotificationOn] = useState(false);
+  const [isNotificationSaving, setIsNotificationSaving] = useState(false);
   const [showManualToken, setShowManualToken] = useState(false);
   const [manualToken, setManualToken] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -195,6 +217,7 @@ export default function HomeScreen() {
     minBookmarks: null,
     includeR18: true,
     includeAi: true,
+    dateRange: 'all',
     seriesMode: 'all',
     hideFinished: false,
   });
@@ -204,6 +227,9 @@ export default function HomeScreen() {
     Record<number, NovelReadingStatus>
   >({});
   const [continueReading, setContinueReading] = useState<LibraryNovel | null>(null);
+  const [followingNewIds, setFollowingNewIds] = useState<Set<number>>(
+    () => new Set(),
+  );
   const persistRefreshToken = useCallback(async (refreshToken: string) => {
     await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
   }, []);
@@ -354,6 +380,46 @@ export default function HomeScreen() {
             searchRequest.target,
           );
           await reloadSearchHistory();
+        }
+
+        if (tab === 'following' && !append) {
+          const rawPreviousNewestAt = await SecureStore.getItemAsync(
+            FOLLOWING_NEWEST_AT_KEY,
+          ).catch(() => null);
+          const previousNewestAt = rawPreviousNewestAt
+            ? Number(rawPreviousNewestAt)
+            : 0;
+          const newestAt = Math.max(
+            0,
+            ...result.novels.map((novel) =>
+              new Date(novel.createDate).getTime(),
+            ),
+          );
+          const nextNewIds =
+            previousNewestAt > 0
+              ? new Set(
+                  result.novels
+                    .filter(
+                      (novel) =>
+                        new Date(novel.createDate).getTime() > previousNewestAt,
+                    )
+                    .map((novel) => novel.id),
+                )
+              : new Set<number>();
+          setFollowingNewIds(nextNewIds);
+          if (nextNewIds.size > 0) {
+            await notifyNewContent({
+              title: 'フォロー中の作者に新着があります',
+              body: `${nextNewIds.size}作品の新着小説を見つけました。`,
+              data: { type: 'following-update' },
+            });
+          }
+          if (newestAt > 0) {
+            await SecureStore.setItemAsync(
+              FOLLOWING_NEWEST_AT_KEY,
+              String(newestAt),
+            );
+          }
         }
 
         let filteredPageNovels = await filterMutedNovels(result.novels);
@@ -562,6 +628,73 @@ export default function HomeScreen() {
     };
   }, [connectWithToken]);
 
+  async function toggleNewContentNotifications() {
+    if (isNotificationSaving) return;
+    setIsNotificationSaving(true);
+    try {
+      const enabled = await setNewContentNotificationEnabled(
+        !isNewContentNotificationOn,
+      );
+      setIsNewContentNotificationOn(enabled);
+      if (!enabled && !isNewContentNotificationOn) {
+        Alert.alert(
+          '通知を有効にできませんでした',
+          '端末の通知権限を確認してください。',
+        );
+      }
+    } finally {
+      setIsNotificationSaving(false);
+    }
+  }
+
+  async function checkAppUpdate(force: boolean) {
+    if (isCheckingUpdate) return;
+    setIsCheckingUpdate(true);
+    try {
+      const info = await checkForAppUpdate(force);
+      if (!info) return;
+      setAppUpdateInfo(info);
+      if (info.shouldNotify) {
+        await markUpdateNotified(info.latestVersion);
+        Alert.alert(
+          `v${info.latestVersion}を利用できます`,
+          info.releaseNotes
+            ? info.releaseNotes.slice(0, 500)
+            : '新しい機能と修正を含む更新があります。',
+          [
+            { text: 'あとで', style: 'cancel' },
+            {
+              text: 'Releaseを開く',
+              onPress: () => void Linking.openURL(info.releaseUrl),
+            },
+          ],
+        );
+      } else if (force) {
+        Alert.alert(
+          info.hasUpdate ? '更新があります' : '最新版です',
+          info.hasUpdate
+            ? `現在 v${info.currentVersion}、最新 v${info.latestVersion}です。`
+            : `v${info.currentVersion}を利用中です。`,
+          info.hasUpdate
+            ? [
+                { text: '閉じる', style: 'cancel' },
+                {
+                  text: 'Releaseを開く',
+                  onPress: () => void Linking.openURL(info.releaseUrl),
+                },
+              ]
+            : [{ text: 'OK' }],
+        );
+      }
+    } catch (error) {
+      if (force) {
+        Alert.alert('更新を確認できませんでした', toErrorMessage(error));
+      }
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  }
+
   async function handleLogout() {
     disconnectPixiv();
     await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY).catch(() => {});
@@ -725,6 +858,51 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => subscribeNovelChanged(handleNovelChanged), [handleNovelChanged]);
+
+  useEffect(() => {
+    const frameId = requestAnimationFrame(() => {
+      void checkAppUpdate(false);
+      void isNewContentNotificationEnabled()
+        .then(setIsNewContentNotificationOn)
+        .catch(() => {});
+    });
+    return () => cancelAnimationFrame(frameId);
+    // 初回起動時だけ実行し、日次制限はapp-update側で管理する。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void syncOfflineSeriesSubscriptions()
+      .then(async (result) => {
+        if (result.discoveredNovels > 0) {
+          await notifyNewContent({
+            title: '購読シリーズに新話があります',
+            body: `${result.discoveredNovels}話を検出し、オフライン保存キューへ追加しました。`,
+            data: { type: 'series-update' },
+          });
+        }
+        return processOfflineDownloadQueue();
+      })
+      .catch(() => {});
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void syncOfflineSeriesSubscriptions()
+          .then(async (result) => {
+            if (result.discoveredNovels > 0) {
+              await notifyNewContent({
+                title: '購読シリーズに新話があります',
+                body: `${result.discoveredNovels}話を検出し、保存キューへ追加しました。`,
+                data: { type: 'series-update' },
+              });
+            }
+            return processOfflineDownloadQueue();
+          })
+          .catch(() => {});
+      }
+    });
+    return () => subscription.remove();
+  }, [isAuthenticated]);
 
   const activeFeed = feeds[activeTab];
 
@@ -952,7 +1130,7 @@ export default function HomeScreen() {
             void openAuthorFromNovel(novelId);
           }}
           onTagPress={openTagSearch}
-          onOpenNovel={(novelId, resume, scrollOffset) => {
+          onOpenNovel={(novelId, resume, scrollOffset, blockIndex) => {
             router.push({
               pathname: '/novel/[id]',
               params: {
@@ -960,6 +1138,9 @@ export default function HomeScreen() {
                 ...(resume ? { resume: '1' } : {}),
                 ...(scrollOffset !== undefined
                   ? { scrollOffset: String(scrollOffset) }
+                  : {}),
+                ...(blockIndex !== undefined
+                  ? { block: String(blockIndex) }
                   : {}),
               },
             });
@@ -1115,6 +1296,11 @@ export default function HomeScreen() {
         renderItem={({ item, index }) => (
           <NovelCard
             novel={item}
+            noticeLabel={
+              activeTab === 'following' && followingNewIds.has(item.id)
+                ? 'NEW'
+                : undefined
+            }
             onAuthorLongPress={() => confirmMuteAuthor(item)}
             onAuthorPress={() => {
               router.push({
@@ -1176,6 +1362,10 @@ export default function HomeScreen() {
           style={styles.modalBackdrop}
         >
           <Pressable onPress={() => {}} style={styles.settingsCard}>
+            <ScrollView
+              contentContainerStyle={styles.settingsContent}
+              showsVerticalScrollIndicator={false}
+            >
             <Text style={styles.settingsTitle}>アカウント</Text>
             <Text style={styles.settingsDescription}>
               {userId === null
@@ -1202,6 +1392,92 @@ export default function HomeScreen() {
             <Text style={styles.themeStatus}>
               現在は{isDark ? 'ダーク' : 'ライト'}表示
             </Text>
+            <View style={styles.settingsDivider} />
+            <Text style={styles.settingsSectionTitle}>新着通知</Text>
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: isNewContentNotificationOn }}
+              disabled={isNotificationSaving}
+              onPress={() => void toggleNewContentNotifications()}
+              style={({ pressed }) => [
+                styles.notificationRow,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.notificationTextArea}>
+                <Text style={styles.notificationTitle}>
+                  フォロー新着・シリーズ新話
+                </Text>
+                <Text style={styles.notificationDescription}>
+                  アプリ起動時と復帰時に新着を検出した場合だけ通知します。
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.settingsSwitchTrack,
+                  isNewContentNotificationOn && styles.settingsSwitchTrackActive,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.settingsSwitchThumb,
+                    isNewContentNotificationOn && styles.settingsSwitchThumbActive,
+                  ]}
+                />
+              </View>
+            </Pressable>
+
+            <View style={styles.settingsDivider} />
+            <View style={styles.updateHeader}>
+              <View>
+                <Text style={styles.settingsSectionTitle}>アプリ情報</Text>
+                <Text style={styles.updateVersion}>現在 v{getCurrentAppVersion()}</Text>
+              </View>
+              {appUpdateInfo?.hasUpdate ? (
+                <View style={styles.updateBadge}>
+                  <Text style={styles.updateBadgeText}>v{appUpdateInfo.latestVersion}</Text>
+                </View>
+              ) : null}
+            </View>
+            <View style={styles.changelogCard}>
+              {CURRENT_RELEASE_HIGHLIGHTS.map((highlight) => (
+                <View key={highlight} style={styles.changelogRow}>
+                  <Text style={styles.changelogBullet}>•</Text>
+                  <Text style={styles.changelogText}>{highlight}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={styles.updateActions}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isCheckingUpdate}
+                onPress={() => void checkAppUpdate(true)}
+                style={({ pressed }) => [
+                  styles.updateCheckButton,
+                  isCheckingUpdate && styles.disabled,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.updateCheckText}>
+                  {isCheckingUpdate ? '確認中…' : '更新を確認'}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="link"
+                onPress={() =>
+                  void Linking.openURL(
+                    appUpdateInfo?.releaseUrl ?? getReleasesUrl(),
+                  )
+                }
+                style={({ pressed }) => [
+                  styles.releaseButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.releaseButtonText}>Release一覧</Text>
+              </Pressable>
+            </View>
+
             <Pressable
               accessibilityRole="button"
               onPress={() => {
@@ -1214,6 +1490,7 @@ export default function HomeScreen() {
             >
               <Text style={styles.logoutButtonText}>ログアウト</Text>
             </Pressable>
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1732,6 +2009,7 @@ function countActiveSearchFilters(filters: AdvancedSearchFilters): number {
     filters.minBookmarks !== null,
     !filters.includeR18,
     !filters.includeAi,
+    filters.dateRange !== 'all',
     filters.seriesMode !== 'all',
     filters.hideFinished,
   ].filter(Boolean).length;
@@ -1817,7 +2095,6 @@ function createStyles(colors: AppColors) {
   },
   loginCard: {
     gap: 14,
-    padding: 20,
     borderRadius: 22,
     backgroundColor: colors.surface,
     shadowColor: colors.shadow,
@@ -2338,12 +2615,91 @@ function createStyles(colors: AppColors) {
   },
   settingsCard: {
     width: '100%',
+    maxHeight: '88%',
     maxWidth: 380,
     gap: 12,
     padding: 22,
     borderRadius: 22,
     backgroundColor: colors.surface,
   },
+  settingsContent: {
+    padding: 20,
+  },
+  notificationRow: {
+    minHeight: 66,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 9,
+    paddingHorizontal: 13,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceAlt,
+  },
+  notificationTextArea: { flex: 1, gap: 3 },
+  notificationTitle: { color: colors.text, fontSize: 11, fontWeight: '900' },
+  notificationDescription: { color: colors.textMuted, fontSize: 9, lineHeight: 15 },
+  settingsSwitchTrack: {
+    width: 44,
+    height: 26,
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+    borderRadius: 13,
+    backgroundColor: colors.border,
+  },
+  settingsSwitchTrackActive: { backgroundColor: colors.accent },
+  settingsSwitchThumb: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+  },
+  settingsSwitchThumbActive: { alignSelf: 'flex-end' },
+  updateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  updateVersion: { color: colors.textMuted, fontSize: 10, marginTop: 3 },
+  updateBadge: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: colors.accentSoft,
+  },
+  updateBadgeText: { color: colors.accentStrong, fontSize: 10, fontWeight: '900' },
+  changelogCard: {
+    gap: 7,
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 13,
+    backgroundColor: colors.surfaceAlt,
+  },
+  changelogRow: { flexDirection: 'row', gap: 7 },
+  changelogBullet: { color: colors.accentStrong, fontSize: 12, fontWeight: '900' },
+  changelogText: { flex: 1, color: colors.textMuted, fontSize: 10, lineHeight: 16 },
+  updateActions: { flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 8 },
+  updateCheckButton: {
+    flex: 1,
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: colors.accent,
+  },
+  updateCheckText: { color: colors.onAccent, fontSize: 11, fontWeight: '900' },
+  releaseButton: {
+    flex: 1,
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 12,
+  },
+  releaseButtonText: { color: colors.text, fontSize: 11, fontWeight: '900' },
   settingsTitle: {
     color: colors.text,
     fontSize: 20,

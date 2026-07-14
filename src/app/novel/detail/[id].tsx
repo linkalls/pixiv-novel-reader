@@ -1,4 +1,5 @@
 import type { PixivNovelItem } from '@book000/pixivts';
+import * as Clipboard from 'expo-clipboard';
 import * as SecureStore from 'expo-secure-store';
 import { Image } from 'expo-image';
 import {
@@ -11,6 +12,7 @@ import {
   ActivityIndicator,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   View,
@@ -36,6 +38,7 @@ import {
   getCachedNovelForRoute,
 } from '@/lib/novel-route-cache';
 import { fetchNovelDetail, setNovelBookmark } from '@/lib/pixiv';
+import { PixivNovelInteractionModal } from '@/components/pixiv-novel-interaction-modal';
 import { type AppColors, useAppTheme } from '@/theme';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
@@ -62,6 +65,7 @@ export default function NovelDetailScreen() {
   const [isDetailLoading, setIsDetailLoading] = useState(isValidNovelId);
   const [isBookmarkLoading, setIsBookmarkLoading] = useState(false);
   const [isOpeningReader, setIsOpeningReader] = useState(false);
+  const [isInteractionVisible, setIsInteractionVisible] = useState(false);
   const [readingHistory, setReadingHistory] = useState<LibraryNovel | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(
@@ -412,6 +416,9 @@ export default function NovelDetailScreen() {
               👁 {detail.totalView.toLocaleString()}
             </Text>
             <Text style={styles.meta}>
+              💬 {detail.totalComments.toLocaleString()}
+            </Text>
+            <Text style={styles.meta}>
               {new Date(detail.createDate).toLocaleDateString('ja-JP')}
             </Text>
           </View>
@@ -506,6 +513,54 @@ export default function NovelDetailScreen() {
           )}
         </Pressable>
 
+        <View style={styles.secondaryActions}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setIsInteractionVisible(true)}
+            style={({ pressed }) => [
+              styles.secondaryAction,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.secondaryActionText}>💬 コメント・リアクション</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              void Clipboard.setStringAsync(
+                `https://www.pixiv.net/novel/show.php?id=${novelId}`,
+              ).then(() => {
+                setErrorMessage('作品URLをコピーしました');
+                setTimeout(() => setErrorMessage(null), 1800);
+              });
+            }}
+            style={({ pressed }) => [
+              styles.secondaryAction,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.secondaryActionText}>URLをコピー</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              const url = `https://www.pixiv.net/novel/show.php?id=${novelId}`;
+              void Share.share({
+                message: `${detail.title}
+${url}`,
+                title: detail.title,
+                url,
+              });
+            }}
+            style={({ pressed }) => [
+              styles.secondaryAction,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.secondaryActionText}>共有</Text>
+          </Pressable>
+        </View>
+
         {detail.tags.length > 0 ? (
           <View style={styles.tagsRow}>
             {detail.tags.map((tag) => (
@@ -550,6 +605,18 @@ export default function NovelDetailScreen() {
           </View>
         ) : null}
       </ScrollView>
+
+      <PixivNovelInteractionModal
+        accent={colors.accent}
+        background={colors.surface}
+        border={colors.border}
+        muted={colors.textMuted}
+        novelId={novelId}
+        onClose={() => setIsInteractionVisible(false)}
+        overlay={colors.overlay}
+        text={colors.text}
+        visible={isInteractionVisible}
+      />
 
       {isOpeningReader ? (
         <View
@@ -783,6 +850,27 @@ function createStyles(colors: AppColors) {
     },
     bookmarkButtonTextActive: {
       color: colors.onAccent,
+    },
+    secondaryActions: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    secondaryAction: {
+      minHeight: 42,
+      flexGrow: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 11,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 13,
+      backgroundColor: colors.surface,
+    },
+    secondaryActionText: {
+      color: colors.text,
+      fontSize: 10,
+      fontWeight: '800',
     },
     tagsRow: {
       flexDirection: 'row',

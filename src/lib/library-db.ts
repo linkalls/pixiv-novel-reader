@@ -16,6 +16,7 @@ export interface LibraryNovel {
   progress: number;
   scrollOffset: number;
   isFinished: boolean;
+  finishedAt: number | null;
   lastReadAt: number;
   isOffline: boolean;
   savedAt: number | null;
@@ -43,6 +44,7 @@ interface HistoryRow {
   progress: number;
   scroll_offset: number;
   is_finished: number;
+  finished_at: number | null;
   last_read_at: number;
   is_offline: number;
   saved_at: number | null;
@@ -58,6 +60,7 @@ interface OfflineListRow extends OfflineRow {
   progress: number | null;
   scroll_offset: number | null;
   is_finished: number | null;
+  finished_at: number | null;
   last_read_at: number | null;
 }
 
@@ -81,6 +84,7 @@ async function getDatabase(): Promise<SQLiteDatabase> {
           progress REAL NOT NULL DEFAULT 0,
           scroll_offset REAL NOT NULL DEFAULT 0,
           is_finished INTEGER NOT NULL DEFAULT 0,
+          finished_at INTEGER,
           last_read_at INTEGER NOT NULL
         );
 
@@ -98,6 +102,7 @@ async function getDatabase(): Promise<SQLiteDatabase> {
       `);
 
       await ensureReadingHistoryTagsColumn(database);
+      await ensureReadingHistoryFinishedAtColumn(database);
       return database;
     });
   }
@@ -144,8 +149,9 @@ export async function recordNovelOpened(
         progress,
         scroll_offset,
         is_finished,
+        finished_at,
         last_read_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(novel_id) DO UPDATE SET
         title = excluded.title,
         author_name = excluded.author_name,
@@ -159,6 +165,11 @@ export async function recordNovelOpened(
           ELSE reading_history.scroll_offset
         END,
         is_finished = MAX(reading_history.is_finished, excluded.is_finished),
+        finished_at = CASE
+          WHEN reading_history.finished_at IS NOT NULL THEN reading_history.finished_at
+          WHEN excluded.is_finished = 1 THEN excluded.finished_at
+          ELSE NULL
+        END,
         last_read_at = excluded.last_read_at
     `,
     detail.id,
@@ -170,6 +181,7 @@ export async function recordNovelOpened(
     clampProgress(progress),
     Math.max(0, scrollOffset),
     progress >= 0.985 ? 1 : 0,
+    progress >= 0.985 ? Date.now() : null,
     Date.now(),
   );
 }
@@ -187,12 +199,18 @@ export async function updateReadingProgress(
       UPDATE reading_history
       SET progress = ?,
           scroll_offset = ?,
-          is_finished = CASE WHEN ? >= 0.985 THEN 1 ELSE is_finished END
+          is_finished = CASE WHEN ? >= 0.985 THEN 1 ELSE is_finished END,
+          finished_at = CASE
+            WHEN ? >= 0.985 AND finished_at IS NULL THEN ?
+            ELSE finished_at
+          END
       WHERE novel_id = ?
     `,
     normalizedProgress,
     Math.max(0, scrollOffset),
     normalizedProgress,
+    normalizedProgress,
+    Date.now(),
     novelId,
   );
 }
@@ -324,11 +342,14 @@ export async function setReadingFinished(
             WHEN ? = 1 THEN 1
             WHEN progress >= 0.985 THEN 0
             ELSE progress
-          END
+          END,
+          finished_at = CASE WHEN ? = 1 THEN ? ELSE NULL END
       WHERE novel_id = ?
     `,
     isFinished ? 1 : 0,
     isFinished ? 1 : 0,
+    isFinished ? 1 : 0,
+    Date.now(),
     novelId,
   );
 }
@@ -442,6 +463,7 @@ export async function listOfflineNovels(limit = 100): Promise<LibraryNovel[]> {
         h.progress,
         h.scroll_offset,
         h.is_finished,
+        h.finished_at,
         h.last_read_at
       FROM offline_novels o
       LEFT JOIN reading_history h ON h.novel_id = o.novel_id
@@ -470,6 +492,7 @@ export async function listOfflineNovels(limit = 100): Promise<LibraryNovel[]> {
         progress: clampProgress(row.progress ?? 0),
         scrollOffset: Math.max(0, row.scroll_offset ?? 0),
         isFinished: row.is_finished === 1,
+        finishedAt: row.finished_at,
         lastReadAt: row.last_read_at ?? row.saved_at,
         isOffline: true,
         savedAt: row.saved_at,
@@ -494,6 +517,7 @@ function historySelectSql(whereClause: string): string {
       h.progress,
       h.scroll_offset,
       h.is_finished,
+      h.finished_at,
       h.last_read_at,
       CASE WHEN o.novel_id IS NULL THEN 0 ELSE 1 END AS is_offline,
       o.saved_at
@@ -514,6 +538,7 @@ function mapHistoryRow(row: HistoryRow): LibraryNovel {
     progress: clampProgress(row.progress),
     scrollOffset: Math.max(0, row.scroll_offset),
     isFinished: row.is_finished === 1,
+    finishedAt: row.finished_at,
     lastReadAt: row.last_read_at,
     isOffline: row.is_offline === 1,
     savedAt: row.saved_at,
@@ -534,6 +559,25 @@ async function ensureReadingHistoryTagsColumn(
   await database.execAsync(
     "ALTER TABLE reading_history ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
   );
+}
+
+async function ensureReadingHistoryFinishedAtColumn(
+  database: SQLiteDatabase,
+): Promise<void> {
+  const columns = await database.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(reading_history)',
+  );
+  if (!columns.some((column) => column.name === 'finished_at')) {
+    await database.execAsync(
+      'ALTER TABLE reading_history ADD COLUMN finished_at INTEGER',
+    );
+  }
+
+  await database.runAsync(`
+    UPDATE reading_history
+    SET finished_at = last_read_at
+    WHERE is_finished = 1 AND finished_at IS NULL
+  `);
 }
 
 function normalizeTagNames(tags: readonly { name: string }[]): string[] {

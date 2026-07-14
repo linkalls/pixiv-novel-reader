@@ -1,5 +1,7 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import Slider from '@react-native-community/slider';
+import * as Brightness from 'expo-brightness';
+import * as Clipboard from 'expo-clipboard';
 import * as SecureStore from 'expo-secure-store';
 import { Image } from 'expo-image';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
@@ -44,6 +46,7 @@ import {
   type VerticalReaderHandle,
 } from '@/components/vertical-reader-view';
 import { PixivNovelAjaxLoader } from '@/components/pixiv-novel-ajax-loader';
+import { PixivNovelInteractionModal } from '@/components/pixiv-novel-interaction-modal';
 import {
   ReaderNavigationModal,
   type ReaderNavigationMode,
@@ -65,6 +68,16 @@ import {
   updateReadingProgress,
   type NovelReadingStatus,
 } from '@/lib/library-db';
+import {
+  enqueueOfflineDownloads,
+  getOfflineDownloadSettings,
+  processOfflineDownloadQueue,
+} from '@/lib/offline-download-queue';
+import {
+  getOfflineSeriesSubscription,
+  subscribeOfflineSeries,
+  unsubscribeOfflineSeries,
+} from '@/lib/offline-series-subscriptions';
 import { emitNovelChanged } from '@/lib/novel-events';
 import {
   excludeRecommendation,
@@ -131,6 +144,12 @@ interface ReaderSettings {
   horizontalPadding: number;
   verticalColumnGap: number;
   fontFamily: ReaderFontFamily;
+  fontWeight: number;
+  paragraphSpacing: number;
+  brightness: number | null;
+  hideStatusBar: boolean;
+  tapToToggleToolbar: boolean;
+  autoOpenNextSeries: boolean;
   keepAwake: boolean;
   layout: ReaderLayout;
 }
@@ -233,6 +252,7 @@ export default function NovelReaderScreen() {
     [router],
   );
   const params = useLocalSearchParams<{
+    block?: string | string[];
     bookmarked?: string | string[];
     history?: string | string[];
     id?: string | string[];
@@ -241,6 +261,12 @@ export default function NovelReaderScreen() {
   }>();
   const { colors, isDark: isAppDark } = useAppTheme();
   const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const rawBlock = Array.isArray(params.block) ? params.block[0] : params.block;
+  const parsedBlockIndex = Number(rawBlock);
+  const directBlockIndex =
+    Number.isInteger(parsedBlockIndex) && parsedBlockIndex >= 0
+      ? parsedBlockIndex
+      : null;
   const rawHistory = Array.isArray(params.history)
     ? params.history[0]
     : params.history;
@@ -289,6 +315,7 @@ export default function NovelReaderScreen() {
   const [isBookshelfVisible, setIsBookshelfVisible] = useState(false);
   const [isMarksVisible, setIsMarksVisible] = useState(false);
   const [isHighlightsVisible, setIsHighlightsVisible] = useState(false);
+  const [isInteractionVisible, setIsInteractionVisible] = useState(false);
   const [highlightBlockIndex, setHighlightBlockIndex] = useState<number | null>(null);
   const [isExclusionsVisible, setIsExclusionsVisible] = useState(false);
   const [excludedNovelIds, setExcludedNovelIds] = useState<Set<number>>(
@@ -309,6 +336,7 @@ export default function NovelReaderScreen() {
   const [seriesError, setSeriesError] = useState<string | null>(null);
   const [seriesAttempt, setSeriesAttempt] = useState(0);
   const [isSeriesDownloading, setIsSeriesDownloading] = useState(false);
+  const [isSeriesAutoSaveEnabled, setIsSeriesAutoSaveEnabled] = useState(false);
   const [seriesDownloadProgress, setSeriesDownloadProgress] = useState<string | null>(null);
   const [offlineImageProgress, setOfflineImageProgress] = useState<string | null>(
     null,
@@ -329,6 +357,7 @@ export default function NovelReaderScreen() {
   >(null);
   const [discoveryAttempt, setDiscoveryAttempt] = useState(1);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [isToolbarVisible, setIsToolbarVisible] = useState(true);
   const [settings, setSettings] = useState<ReaderSettings>({
     theme: isAppDark ? 'black' : 'white',
     fontSize: 18,
@@ -336,6 +365,12 @@ export default function NovelReaderScreen() {
     horizontalPadding: 24,
     verticalColumnGap: 1.3,
     fontFamily: 'serif',
+    fontWeight: 400,
+    paragraphSpacing: 28,
+    brightness: null,
+    hideStatusBar: false,
+    tapToToggleToolbar: true,
+    autoOpenNextSeries: false,
     keepAwake: true,
     layout: 'horizontal',
   });
@@ -347,6 +382,7 @@ export default function NovelReaderScreen() {
     !isBookshelfVisible &&
     !isMarksVisible &&
     !isHighlightsVisible &&
+    !isInteractionVisible &&
     !isExclusionsVisible &&
     !isNavigatorVisible &&
     !isSeriesVisible;
@@ -367,7 +403,12 @@ export default function NovelReaderScreen() {
   );
   const resumeOffsetRef = useRef<number | null>(null);
   const hasRestoredPositionRef = useRef(false);
+  const hasJumpedToDirectBlockRef = useRef(false);
   const hasOfflineContentRef = useRef(false);
+  const hasAutoDeletedOfflineRef = useRef(false);
+  const hasAutoOpenedNextSeriesRef = useRef(false);
+  const previousBrightnessRef = useRef<number | null>(null);
+  const readerTapStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const historyNovelIdRef = useRef<number | null>(null);
   const appStateRef = useRef(AppState.currentState);
   const isReaderFocusedRef = useRef(isReadingSurfaceVisible);
@@ -563,6 +604,20 @@ export default function NovelReaderScreen() {
           fontFamily: isReaderFontFamily(parsed.fontFamily)
             ? parsed.fontFamily
             : 'serif',
+          fontWeight: clampNumber(parsed.fontWeight, 300, 700, 400),
+          paragraphSpacing: clampNumber(
+            parsed.paragraphSpacing,
+            0,
+            48,
+            28,
+          ),
+          brightness:
+            parsed.brightness === null || parsed.brightness === undefined
+              ? null
+              : clampNumber(parsed.brightness, 0.08, 1, 0.5),
+          hideStatusBar: parsed.hideStatusBar === true,
+          tapToToggleToolbar: parsed.tapToToggleToolbar !== false,
+          autoOpenNextSeries: parsed.autoOpenNextSeries === true,
           keepAwake: parsed.keepAwake !== false,
           layout,
         });
@@ -579,6 +634,52 @@ export default function NovelReaderScreen() {
     // 初回だけ復元する。端末テーマ変更はアプリ全体の設定画面に任せる。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (
+      settings.layout !== 'vertical' ||
+      directBlockIndex === null ||
+      !readerContent ||
+      hasJumpedToDirectBlockRef.current
+    ) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      hasJumpedToDirectBlockRef.current = true;
+      verticalReaderRef.current?.jumpToBlock(directBlockIndex, false);
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [directBlockIndex, readerContent, settings.layout]);
+
+  useEffect(() => {
+    if (!isScreenFocused) return;
+    let isActive = true;
+
+    void (async () => {
+      if (!(await Brightness.isAvailableAsync())) return;
+      if (previousBrightnessRef.current === null) {
+        previousBrightnessRef.current = await Brightness.getBrightnessAsync();
+      }
+      if (!isActive) return;
+      if (settings.brightness === null) {
+        if (Platform.OS === 'android') {
+          await Brightness.restoreSystemBrightnessAsync();
+        }
+      } else {
+        await Brightness.setBrightnessAsync(settings.brightness);
+      }
+    })().catch(() => {});
+
+    return () => {
+      isActive = false;
+      if (Platform.OS === 'android') {
+        void Brightness.restoreSystemBrightnessAsync().catch(() => {});
+      } else if (previousBrightnessRef.current !== null) {
+        void Brightness.setBrightnessAsync(previousBrightnessRef.current).catch(() => {});
+      }
+    };
+  }, [isScreenFocused, settings.brightness]);
 
   useEffect(() => {
     const tag = 'pixiv-novel-reader-reading';
@@ -769,6 +870,10 @@ export default function NovelReaderScreen() {
           result.novels.map((novel) => novel.id),
         );
         setSeriesReadingStatuses(Object.fromEntries(statusMap));
+        const subscription = await getOfflineSeriesSubscription(currentSeriesId);
+        if (isMounted) {
+          setIsSeriesAutoSaveEnabled(subscription !== null);
+        }
         await SecureStore.setItemAsync(
           REFRESH_TOKEN_KEY,
           result.refreshToken,
@@ -1222,54 +1327,55 @@ export default function NovelReaderScreen() {
   }
 
 
+  async function setSeriesAutoSave(enabled: boolean) {
+    if (!seriesId || seriesNovels.length === 0) return;
+    setIsSeriesAutoSaveEnabled(enabled);
+    try {
+      if (enabled) {
+        await subscribeOfflineSeries({
+          seriesId,
+          anchorNovelId: novelId,
+          title: seriesTitle || series?.title || 'シリーズ',
+          knownNovelIds: seriesNovels.map((novel) => novel.id),
+        });
+        showStatus('新話の自動保存を有効にしました');
+      } else {
+        await unsubscribeOfflineSeries(seriesId);
+        showStatus('新話の自動保存を解除しました');
+      }
+    } catch (error) {
+      setIsSeriesAutoSaveEnabled(!enabled);
+      showStatus(`シリーズ設定を変更できませんでした: ${toErrorMessage(error)}`);
+    }
+  }
+
   async function downloadEntireSeries() {
-    if (
-      isSeriesDownloading ||
-      seriesNovels.length === 0 ||
-      !seriesId
-    ) {
+    if (isSeriesDownloading || seriesNovels.length === 0) {
       return;
     }
 
     setIsSeriesDownloading(true);
-    setSeriesDownloadProgress(`0/${seriesNovels.length}`);
-    let savedCount = 0;
-    const failedTitles: string[] = [];
-
-    for (const [index, novel] of seriesNovels.entries()) {
-      setSeriesDownloadProgress(`${index + 1}/${seriesNovels.length}`);
-      try {
-        const targetDetail =
-          detail?.id === novel.id ? detail : await fetchNovelDetail(novel.id);
-        const targetContent =
-          detail?.id === novel.id && readerContent
-            ? readerContent
-            : await fetchNovelText(novel.id);
-        const localizedContent = await localizeNovelImages(
-          novel.id,
-          targetContent,
+    setSeriesDownloadProgress(`全${seriesNovels.length}話をキューへ追加中…`);
+    try {
+      const queued = await enqueueOfflineDownloads(seriesNovels);
+      setSeriesDownloadProgress(`${queued}話を保存中…`);
+      const result = await processOfflineDownloadQueue();
+      if (result.blockedByWifi) {
+        showStatus(`${queued}話を追加しました。Wi-Fi接続時に保存します`);
+      } else {
+        showStatus(
+          `${result.completed}話を保存し、${result.failed}話は再試行待ちです`,
         );
-        await saveOfflineNovel(targetDetail, localizedContent);
-        savedCount += 1;
-
-        if (novel.id === novelId) {
-          setIsOfflineSaved(true);
-          hasOfflineContentRef.current = true;
-        }
-      } catch {
-        failedTitles.push(novel.title);
       }
-    }
-
-    setIsSeriesDownloading(false);
-    setSeriesDownloadProgress(null);
-
-    if (failedTitles.length === 0) {
-      showStatus(`シリーズ全${savedCount}話を保存しました`);
-    } else {
-      showStatus(
-        `${savedCount}話を保存し、${failedTitles.length}話の保存に失敗しました`,
+      const statusMap = await getNovelReadingStatuses(
+        seriesNovels.map((novel) => novel.id),
       );
+      setSeriesReadingStatuses(Object.fromEntries(statusMap));
+    } catch (error) {
+      showStatus(`シリーズ保存を開始できませんでした: ${toErrorMessage(error)}`);
+    } finally {
+      setIsSeriesDownloading(false);
+      setSeriesDownloadProgress(null);
     }
   }
 
@@ -1284,11 +1390,40 @@ export default function NovelReaderScreen() {
 
     progressSaveTimerRef.current = setTimeout(() => {
       progressSaveTimerRef.current = null;
+      const savedProgress = currentProgressRef.current;
       void updateReadingProgress(
         novelId,
-        currentProgressRef.current,
+        savedProgress,
         currentScrollOffsetRef.current,
-      );
+      ).then(async () => {
+        if (
+          savedProgress < 0.985 ||
+          !isOfflineSaved ||
+          hasAutoDeletedOfflineRef.current
+        ) {
+          return;
+        }
+        const offlineSettings = await getOfflineDownloadSettings().catch(
+          () => null,
+        );
+        if (!offlineSettings?.deleteFinished) return;
+        hasAutoDeletedOfflineRef.current = true;
+        await deleteOfflineNovel(novelId);
+        setIsOfflineSaved(false);
+        showStatus('読了したためオフライン保存を自動削除しました');
+      }).finally(() => {
+        if (
+          savedProgress >= 0.985 &&
+          settings.autoOpenNextSeries &&
+          adjacentSeries.next &&
+          !hasAutoOpenedNextSeriesRef.current
+        ) {
+          hasAutoOpenedNextSeriesRef.current = true;
+          const nextNovel = adjacentSeries.next;
+          showStatus('読了しました。次の話を開きます');
+          setTimeout(() => openSeriesNovel(nextNovel), 850);
+        }
+      });
       persistCurrentReadingSession();
     }, 800);
   }
@@ -1400,6 +1535,17 @@ export default function NovelReaderScreen() {
 
   function restoreReadingPosition() {
     if (
+      directBlockIndex !== null &&
+      !hasJumpedToDirectBlockRef.current &&
+      blockOffsetsRef.current[directBlockIndex] !== undefined
+    ) {
+      hasJumpedToDirectBlockRef.current = true;
+      hasRestoredPositionRef.current = true;
+      requestAnimationFrame(() => jumpToBlock(directBlockIndex));
+      return;
+    }
+
+    if (
       hasRestoredPositionRef.current ||
       resumeOffsetRef.current === null ||
       resumeOffsetRef.current <= 0
@@ -1416,13 +1562,38 @@ export default function NovelReaderScreen() {
     });
   }
 
+  function toggleReaderToolbar() {
+    if (!settings.tapToToggleToolbar) return;
+    setIsToolbarVisible((current) => !current);
+  }
+
+  function handleReaderTapStart(event: GestureResponderEvent) {
+    const { pageX, pageY } = event.nativeEvent;
+    readerTapStartRef.current = { x: pageX, y: pageY, at: Date.now() };
+    markReadingActivity();
+  }
+
+  function handleReaderTapEnd(event: GestureResponderEvent) {
+    const start = readerTapStartRef.current;
+    readerTapStartRef.current = null;
+    if (!start) return;
+    const { pageX, pageY } = event.nativeEvent;
+    const movement = Math.hypot(pageX - start.x, pageY - start.y);
+    if (movement <= 9 && Date.now() - start.at <= 420) {
+      toggleReaderToolbar();
+    }
+  }
+
   return (
     <SafeAreaView
-      edges={['top', 'bottom']}
+      edges={isToolbarVisible ? ['top', 'bottom'] : ['bottom']}
       onTouchStart={markReadingActivity}
       style={styles.safeArea}
     >
-      <StatusBar style={palette.isDark ? 'light' : 'dark'} />
+      <StatusBar
+        hidden={settings.hideStatusBar}
+        style={palette.isDark ? 'light' : 'dark'}
+      />
 
       {isOfflineChecked && isAjaxLoading && !readerContent && isValidNovelId && (
         <PixivNovelAjaxLoader
@@ -1435,8 +1606,10 @@ export default function NovelReaderScreen() {
         />
       )}
 
+      {isToolbarVisible ? (
+        <>
       <View style={styles.toolbar}>
-        <View style={styles.toolbarSide}>
+          <View style={styles.toolbarSide}>
           <ToolbarSymbolButton
             accessibilityLabel="前の画面へ戻る"
             androidName="arrow_back"
@@ -1490,6 +1663,8 @@ export default function NovelReaderScreen() {
           ]}
         />
       </View>
+        </>
+      ) : null}
 
       {isTextLoading ? (
         <View style={styles.centered}>
@@ -1505,6 +1680,7 @@ export default function NovelReaderScreen() {
             embeddedImages={readerContent.embeddedImages}
             fontFamily={settings.fontFamily}
             fontSize={fontSize}
+            fontWeight={settings.fontWeight}
             horizontalPadding={settings.horizontalPadding}
             initialProgress={verticalInitialProgressRef.current}
             lineHeight={lineHeight}
@@ -1516,6 +1692,7 @@ export default function NovelReaderScreen() {
                 : null
             }
             muted={palette.muted}
+            paragraphSpacing={settings.paragraphSpacing}
             onActivity={markReadingActivity}
             onAuthorPress={() => {
               if (detail) {
@@ -1526,6 +1703,7 @@ export default function NovelReaderScreen() {
               setHighlightBlockIndex(blockIndex);
               setIsHighlightsVisible(true);
             }}
+            onTap={toggleReaderToolbar}
             onBlockChange={setVerticalBlockIndex}
             onProgress={(progress) => {
               setScrollProgress(progress);
@@ -1540,6 +1718,8 @@ export default function NovelReaderScreen() {
           />
         ) : (
           <ScrollView
+            onTouchEnd={handleReaderTapEnd}
+            onTouchStart={handleReaderTapStart}
           contentContainerStyle={[
             styles.readerContent,
             { paddingHorizontal: settings.horizontalPadding },
@@ -1591,7 +1771,7 @@ export default function NovelReaderScreen() {
             onLayout={(event) => {
               novelBodyOffsetRef.current = event.nativeEvent.layout.y;
             }}
-            style={styles.novelBody}
+            style={[styles.novelBody, { gap: settings.paragraphSpacing }]}
           >
             {blocks.map((block, index) => (
               <View
@@ -1610,6 +1790,7 @@ export default function NovelReaderScreen() {
                   embeddedImages={readerContent.embeddedImages}
                   fontFamily={settings.fontFamily}
                   fontSize={fontSize}
+                  fontWeight={settings.fontWeight}
                   lineHeight={lineHeight}
                   onLongPress={() => {
                     setHighlightBlockIndex(index);
@@ -1789,9 +1970,11 @@ export default function NovelReaderScreen() {
         error={seriesError}
         isDownloading={isSeriesDownloading}
         isLoading={isSeriesLoading}
+        isAutoSaveEnabled={isSeriesAutoSaveEnabled}
         muted={palette.muted}
         novels={seriesNovels}
         readingStatuses={seriesReadingStatuses}
+        onAutoSaveChange={(enabled) => void setSeriesAutoSave(enabled)}
         onClose={() => {
           setIsSeriesVisible(false);
         }}
@@ -1906,6 +2089,18 @@ export default function NovelReaderScreen() {
         visible={isExclusionsVisible}
       />
 
+      <PixivNovelInteractionModal
+        accent={palette.accent}
+        background={palette.toolbar}
+        border={palette.border}
+        muted={palette.muted}
+        novelId={novelId}
+        onClose={() => setIsInteractionVisible(false)}
+        overlay={palette.overlay}
+        text={palette.text}
+        visible={isInteractionVisible}
+      />
+
       <ReaderSettingsModal
         onChange={updateSettings}
         onClose={() => {
@@ -1978,6 +2173,16 @@ export default function NovelReaderScreen() {
               params: buildDetailRouteParams(novelId, bookmarkState.value),
             });
           });
+        }}
+        onOpenInteractions={() => {
+          setIsMoreVisible(false);
+          requestAnimationFrame(() => setIsInteractionVisible(true));
+        }}
+        onCopyUrl={() => {
+          setIsMoreVisible(false);
+          void Clipboard.setStringAsync(
+            `https://www.pixiv.net/novel/show.php?id=${novelId}`,
+          ).then(() => showStatus('作品URLをコピーしました'));
         }}
         onShare={() => {
           setIsMoreVisible(false);
@@ -2482,6 +2687,7 @@ interface NovelBlockViewProps {
   embeddedImages: Record<string, string>;
   fontFamily: ReaderFontFamily;
   fontSize: number;
+  fontWeight: number;
   lineHeight: number;
   onLongPress: () => void;
   palette: ReaderPalette;
@@ -2493,6 +2699,7 @@ function NovelBlockView({
   embeddedImages,
   fontFamily,
   fontSize,
+  fontWeight,
   lineHeight,
   onLongPress,
   palette,
@@ -2512,6 +2719,16 @@ function NovelBlockView({
                   ? Platform.select({ android: 'serif', default: 'Georgia' })
                   : Platform.select({ android: 'sans-serif', default: 'System' }),
               fontSize,
+              fontWeight:
+                fontWeight >= 650
+                  ? '700'
+                  : fontWeight >= 550
+                    ? '600'
+                    : fontWeight >= 450
+                      ? '500'
+                      : fontWeight >= 350
+                        ? '400'
+                        : '300',
               lineHeight,
             },
           ]}
@@ -2702,6 +2919,34 @@ function ReaderSettingsModal({
           />
 
           <SettingsSlider
+            label="文字の太さ"
+            maximumValue={700}
+            minimumValue={300}
+            onValueChange={(fontWeight) => {
+              onChange({ ...settings, fontWeight });
+            }}
+            palette={palette}
+            step={100}
+            styles={styles}
+            value={settings.fontWeight}
+            valueText={`${Math.round(settings.fontWeight)}`}
+          />
+
+          <SettingsSlider
+            label="段落間隔"
+            maximumValue={48}
+            minimumValue={0}
+            onValueChange={(paragraphSpacing) => {
+              onChange({ ...settings, paragraphSpacing });
+            }}
+            palette={palette}
+            step={2}
+            styles={styles}
+            value={settings.paragraphSpacing}
+            valueText={`${Math.round(settings.paragraphSpacing)}px`}
+          />
+
+          <SettingsSlider
             label="左右・上下余白"
             maximumValue={52}
             minimumValue={8}
@@ -2750,6 +2995,69 @@ function ReaderSettingsModal({
               palette={palette}
             />
           </View>
+
+          <Text style={styles.sectionLabel}>画面</Text>
+          <SettingsToggleRow
+            label="端末の明るさを使う"
+            onPress={() => {
+              onChange({
+                ...settings,
+                brightness: settings.brightness === null ? 0.5 : null,
+              });
+            }}
+            palette={palette}
+            styles={styles}
+            value={settings.brightness === null}
+          />
+          {settings.brightness !== null ? (
+            <SettingsSlider
+              label="読書中の明るさ"
+              maximumValue={1}
+              minimumValue={0.08}
+              onValueChange={(brightness) => {
+                onChange({ ...settings, brightness });
+              }}
+              palette={palette}
+              step={0.02}
+              styles={styles}
+              value={settings.brightness}
+              valueText={`${Math.round(settings.brightness * 100)}%`}
+            />
+          ) : null}
+          <SettingsToggleRow
+            label="ステータスバーを隠す"
+            onPress={() => {
+              onChange({ ...settings, hideStatusBar: !settings.hideStatusBar });
+            }}
+            palette={palette}
+            styles={styles}
+            value={settings.hideStatusBar}
+          />
+          <SettingsToggleRow
+            label="本文タップでツールバーを開閉"
+            onPress={() => {
+              onChange({
+                ...settings,
+                tapToToggleToolbar: !settings.tapToToggleToolbar,
+              });
+            }}
+            palette={palette}
+            styles={styles}
+            value={settings.tapToToggleToolbar}
+          />
+
+          <SettingsToggleRow
+            label="シリーズ読了時に次の話を自動で開く"
+            onPress={() => {
+              onChange({
+                ...settings,
+                autoOpenNextSeries: !settings.autoOpenNextSeries,
+              });
+            }}
+            palette={palette}
+            styles={styles}
+            value={settings.autoOpenNextSeries}
+          />
 
           <SettingsToggleRow
             label="読書中は画面を消灯しない"
@@ -2900,11 +3208,13 @@ interface MoreActionsModalProps {
   onOpenExclusions: () => void;
   onOpenMarks: () => void;
   onOpenHighlights: () => void;
+  onOpenInteractions: () => void;
   onOpenNavigator: () => void;
   onOpenPixiv: () => void;
   onOpenSeries: () => void;
   onOpenSettings: () => void;
   onOpenSpeech: () => void;
+  onCopyUrl: () => void;
   onShare: () => void;
   onReload: () => void;
   onReturn: () => void;
@@ -2926,11 +3236,13 @@ function MoreActionsModal({
   onOpenExclusions,
   onOpenMarks,
   onOpenHighlights,
+  onOpenInteractions,
   onOpenNavigator,
   onOpenPixiv,
   onOpenSeries,
   onOpenSettings,
   onOpenSpeech,
+  onCopyUrl,
   onShare,
   onReload,
   onReturn,
@@ -3008,6 +3320,11 @@ function MoreActionsModal({
             palette={palette}
           />
           <SheetAction
+            label="コメント・リアクション"
+            onPress={onOpenInteractions}
+            palette={palette}
+          />
+          <SheetAction
             label="おすすめ除外を管理"
             onPress={onOpenExclusions}
             palette={palette}
@@ -3024,7 +3341,12 @@ function MoreActionsModal({
             palette={palette}
           />
           <SheetAction
-            label="作品URLを共有・コピー"
+            label="作品URLをコピー"
+            onPress={onCopyUrl}
+            palette={palette}
+          />
+          <SheetAction
+            label="作品を共有"
             onPress={onShare}
             palette={palette}
           />
