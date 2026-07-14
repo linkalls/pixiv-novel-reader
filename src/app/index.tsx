@@ -24,6 +24,8 @@ import { NovelCard } from '@/components/novel-card';
 import { PixivLoginModal } from '@/components/pixiv-login-modal';
 import {
   getNovelReadingStatuses,
+  listReadingHistory,
+  type LibraryNovel,
   type NovelReadingStatus,
 } from '@/lib/library-db';
 import { subscribeNovelChanged } from '@/lib/novel-events';
@@ -175,6 +177,7 @@ export default function HomeScreen() {
   const [readingStatuses, setReadingStatuses] = useState<
     Record<number, NovelReadingStatus>
   >({});
+  const [continueReading, setContinueReading] = useState<LibraryNovel | null>(null);
   const persistRefreshToken = useCallback(async (refreshToken: string) => {
     await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
   }, []);
@@ -620,6 +623,9 @@ export default function HomeScreen() {
     useCallback(() => {
       void reloadSearchHistory();
       void reloadReadingStatuses(feedsRef.current[activeTab].novels);
+      void listReadingHistory({ filter: 'reading', sort: 'recent' })
+        .then((items) => setContinueReading(items[0] ?? null))
+        .catch(() => setContinueReading(null));
     }, [activeTab, reloadReadingStatuses, reloadSearchHistory]),
   );
 
@@ -871,53 +877,96 @@ export default function HomeScreen() {
           />
         }
         ListHeaderComponent={
-          <FeedControls
-            activeTab={activeTab}
-            bookmarkVisibility={bookmarkVisibility}
-            onBookmarkVisibilityChange={(visibility) => {
-              setBookmarkVisibility(visibility);
-              void requestFeed('bookmarks', {
-                bookmarkVisibility: visibility,
-              });
-            }}
-            onRankingModeChange={(mode) => {
-              setRankingMode(mode);
-              void requestFeed('ranking', { rankingMode: mode });
-            }}
-            onClearSearchHistory={() => {
-              void clearSearchHistory();
-            }}
-            onDeleteSearchHistoryItem={(item) => {
-              void removeSearchHistoryItem(item);
-            }}
-            onRunSearchHistoryItem={runSearchHistoryItem}
-            onSearch={() => {
-              submitSearch();
-            }}
-            onSearchSortChange={(sort) => {
-              setSearchSort(sort);
+          <>
+            {activeTab === 'recommended' && continueReading ? (
+              <Pressable
+                accessibilityLabel={`「${continueReading.title}」を続きから読む`}
+                accessibilityRole="button"
+                onPress={() => {
+                  router.push({
+                    pathname: '/novel/[id]',
+                    params: {
+                      id: String(continueReading.novelId),
+                      resume: '1',
+                      scrollOffset: String(continueReading.scrollOffset),
+                    },
+                  });
+                }}
+                style={({ pressed }) => [
+                  styles.continueCard,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <View style={styles.continueHeader}>
+                  <Text style={styles.continueEyebrow}>続きから読む</Text>
+                  <Text style={styles.continuePercent}>
+                    {Math.round(continueReading.progress * 100)}%
+                  </Text>
+                </View>
+                <Text numberOfLines={2} style={styles.continueTitle}>
+                  {continueReading.title}
+                </Text>
+                <Text numberOfLines={1} style={styles.continueAuthor}>
+                  {continueReading.authorName}
+                </Text>
+                <View style={styles.continueTrack}>
+                  <View
+                    style={[
+                      styles.continueValue,
+                      { width: `${Math.round(continueReading.progress * 100)}%` },
+                    ]}
+                  />
+                </View>
+              </Pressable>
+            ) : null}
+            <FeedControls
+              activeTab={activeTab}
+              bookmarkVisibility={bookmarkVisibility}
+              onBookmarkVisibilityChange={(visibility) => {
+                setBookmarkVisibility(visibility);
+                void requestFeed('bookmarks', {
+                  bookmarkVisibility: visibility,
+                });
+              }}
+              onRankingModeChange={(mode) => {
+                setRankingMode(mode);
+                void requestFeed('ranking', { rankingMode: mode });
+              }}
+              onClearSearchHistory={() => {
+                void clearSearchHistory();
+              }}
+              onDeleteSearchHistoryItem={(item) => {
+                void removeSearchHistoryItem(item);
+              }}
+              onRunSearchHistoryItem={runSearchHistoryItem}
+              onSearch={() => {
+                submitSearch();
+              }}
+              onSearchSortChange={(sort) => {
+                setSearchSort(sort);
 
-              if (searchWord.trim().length > 0) {
-                submitSearch(sort, searchTarget);
-              }
-            }}
-            onSearchTargetChange={(target) => {
-              setSearchTarget(target);
+                if (searchWord.trim().length > 0) {
+                  submitSearch(sort, searchTarget);
+                }
+              }}
+              onSearchTargetChange={(target) => {
+                setSearchTarget(target);
 
-              if (searchWord.trim().length > 0) {
-                submitSearch(searchSort, target);
-              }
-            }}
-            onToggleSearchHistoryPin={(item) => {
-              void toggleSearchHistoryPin(item);
-            }}
-            rankingMode={rankingMode}
-            searchHistory={searchHistory}
-            searchSort={searchSort}
-            searchTarget={searchTarget}
-            searchWord={searchWord}
-            setSearchWord={setSearchWord}
-          />
+                if (searchWord.trim().length > 0) {
+                  submitSearch(searchSort, target);
+                }
+              }}
+              onToggleSearchHistoryPin={(item) => {
+                void toggleSearchHistoryPin(item);
+              }}
+              rankingMode={rankingMode}
+              searchHistory={searchHistory}
+              searchSort={searchSort}
+              searchTarget={searchTarget}
+              searchWord={searchWord}
+              setSearchWord={setSearchWord}
+            />
+          </>
         }
         onEndReached={() => {
           if (activeFeed.nextUrl && !activeFeed.isLoadingMore) {
@@ -1759,6 +1808,53 @@ function createStyles(colors: AppColors) {
     paddingHorizontal: 14,
     paddingTop: 8,
     paddingBottom: 70,
+  },
+  continueCard: {
+    gap: 6,
+    marginBottom: 12,
+    padding: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 18,
+    backgroundColor: colors.surface,
+  },
+  continueHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  continueEyebrow: {
+    color: colors.accentStrong,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  continuePercent: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  continueTitle: {
+    color: colors.text,
+    fontSize: 17,
+    lineHeight: 23,
+    fontWeight: '900',
+  },
+  continueAuthor: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  continueTrack: {
+    height: 5,
+    marginTop: 4,
+    overflow: 'hidden',
+    borderRadius: 999,
+    backgroundColor: colors.border,
+  },
+  continueValue: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: colors.accent,
   },
   separator: {
     height: 11,

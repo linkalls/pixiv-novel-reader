@@ -20,6 +20,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   View,
@@ -1863,6 +1864,15 @@ export default function NovelReaderScreen() {
             });
           });
         }}
+        onShare={() => {
+          setIsMoreVisible(false);
+          const url = `https://www.pixiv.net/novel/show.php?id=${novelId}`;
+          void Share.share({
+            message: `${readerContent?.title ?? detail?.title ?? 'Pixiv小説'}\n${url}`,
+            title: readerContent?.title ?? detail?.title ?? 'Pixiv小説',
+            url,
+          });
+        }}
         onOpenPixiv={() => {
           setIsMoreVisible(false);
           void Linking.openURL(
@@ -2646,6 +2656,7 @@ interface MoreActionsModalProps {
   onOpenSeries: () => void;
   onOpenSettings: () => void;
   onOpenSpeech: () => void;
+  onShare: () => void;
   onReload: () => void;
   onReturn: () => void;
   onToggleOffline: () => void;
@@ -2670,6 +2681,7 @@ function MoreActionsModal({
   onOpenSeries,
   onOpenSettings,
   onOpenSpeech,
+  onShare,
   onReload,
   onReturn,
   onToggleOffline,
@@ -2753,6 +2765,11 @@ function MoreActionsModal({
                 : '本文と挿絵をオフライン保存')
             }
             onPress={onToggleOffline}
+            palette={palette}
+          />
+          <SheetAction
+            label="作品URLを共有・コピー"
+            onPress={onShare}
             palette={palette}
           />
           <SheetAction
