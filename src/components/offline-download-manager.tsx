@@ -44,6 +44,9 @@ export function OfflineDownloadManager({
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [items, setItems] = useState<OfflineDownloadQueueItem[]>([]);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [subscriptions, setSubscriptions] = useState<
+    OfflineSeriesSubscription[]
+  >([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
