@@ -1,6 +1,8 @@
 import type { PixivNovelItem } from '@book000/pixivts';
+import Slider from '@react-native-community/slider';
 import * as SecureStore from 'expo-secure-store';
 import { Image } from 'expo-image';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SymbolView } from 'expo-symbols';
@@ -34,6 +36,7 @@ import Svg, { Path as SvgPath } from 'react-native-svg';
 import { BookshelfPickerModal } from '@/components/bookshelf-picker-modal';
 import { NovelSeriesModal } from '@/components/novel-series-modal';
 import { ReaderMarksModal } from '@/components/reader-marks-modal';
+import { ReaderHighlightsModal } from '@/components/reader-highlights-modal';
 import { ReaderSpeechModal } from '@/components/reader-speech-modal';
 import { RecommendationExclusionsModal } from '@/components/recommendation-exclusions-modal';
 import {
@@ -53,12 +56,14 @@ import {
 } from '@/lib/bookmark-state';
 import {
   deleteOfflineNovel,
+  getNovelReadingStatuses,
   getOfflineNovel,
   getReadingHistory,
   recordNovelOpened,
   saveOfflineNovel,
   updateOfflineNovelDetail,
   updateReadingProgress,
+  type NovelReadingStatus,
 } from '@/lib/library-db';
 import { emitNovelChanged } from '@/lib/novel-events';
 import {
@@ -87,6 +92,7 @@ import {
   createReaderMarkExcerpt,
   findReaderBlockAtOffset,
 } from '@/lib/reader-marks';
+import type { ReaderHighlight } from '@/lib/reader-highlights-db';
 import { ReadingActivityClock } from '@/lib/reading-activity';
 import {
   finishReadingSession,
@@ -116,11 +122,16 @@ type ReaderThemeName = 'white' | 'gray' | 'black' | 'blue' | 'yellow';
 type ReaderFontSize = 'small' | 'normal' | 'large';
 type ReaderLineSpacing = 'narrow' | 'wide';
 type ReaderLayout = 'horizontal' | 'vertical';
+type ReaderFontFamily = 'serif' | 'sans';
 
 interface ReaderSettings {
   theme: ReaderThemeName;
-  fontSize: ReaderFontSize;
-  lineSpacing: ReaderLineSpacing;
+  fontSize: number;
+  lineHeightRatio: number;
+  horizontalPadding: number;
+  verticalColumnGap: number;
+  fontFamily: ReaderFontFamily;
+  keepAwake: boolean;
   layout: ReaderLayout;
 }
 
@@ -277,6 +288,8 @@ export default function NovelReaderScreen() {
   const [isMoreVisible, setIsMoreVisible] = useState(false);
   const [isBookshelfVisible, setIsBookshelfVisible] = useState(false);
   const [isMarksVisible, setIsMarksVisible] = useState(false);
+  const [isHighlightsVisible, setIsHighlightsVisible] = useState(false);
+  const [highlightBlockIndex, setHighlightBlockIndex] = useState<number | null>(null);
   const [isExclusionsVisible, setIsExclusionsVisible] = useState(false);
   const [excludedNovelIds, setExcludedNovelIds] = useState<Set<number>>(
     () => new Set(),
@@ -288,6 +301,9 @@ export default function NovelReaderScreen() {
   const [activeSearchMatchIndex, setActiveSearchMatchIndex] = useState(-1);
   const [isSeriesVisible, setIsSeriesVisible] = useState(false);
   const [seriesNovels, setSeriesNovels] = useState<PixivNovelItem[]>([]);
+  const [seriesReadingStatuses, setSeriesReadingStatuses] = useState<
+    Record<number, NovelReadingStatus>
+  >({});
   const [seriesTitle, setSeriesTitle] = useState('');
   const [isSeriesLoading, setIsSeriesLoading] = useState(false);
   const [seriesError, setSeriesError] = useState<string | null>(null);
@@ -315,8 +331,12 @@ export default function NovelReaderScreen() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>({
     theme: isAppDark ? 'black' : 'white',
-    fontSize: 'normal',
-    lineSpacing: 'wide',
+    fontSize: 18,
+    lineHeightRatio: 2.08,
+    horizontalPadding: 24,
+    verticalColumnGap: 1.3,
+    fontFamily: 'serif',
+    keepAwake: true,
     layout: 'horizontal',
   });
   const isReadingSurfaceVisible =
@@ -326,6 +346,7 @@ export default function NovelReaderScreen() {
     !isMoreVisible &&
     !isBookshelfVisible &&
     !isMarksVisible &&
+    !isHighlightsVisible &&
     !isExclusionsVisible &&
     !isNavigatorVisible &&
     !isSeriesVisible;
@@ -381,6 +402,12 @@ export default function NovelReaderScreen() {
     blocks,
     currentMarkBlockIndex,
   );
+  const currentHighlightBlockIndex =
+    highlightBlockIndex ?? currentMarkBlockIndex;
+  const currentHighlightExcerpt = createReaderHighlightExcerpt(
+    blocks,
+    currentHighlightBlockIndex,
+  );
   const searchMatches = useMemo(
     () => searchReaderBlocks(blocks, searchQuery),
     [blocks, searchQuery],
@@ -412,10 +439,8 @@ export default function NovelReaderScreen() {
         !excludedNovelIds.has(novel.id),
     );
   }, [discoveryNovels, excludedNovelIds, novelId, relatedItems]);
-  const fontSize = FONT_SIZE_VALUES[settings.fontSize];
-  const lineHeight = Math.round(
-    fontSize * LINE_HEIGHT_RATIOS[settings.lineSpacing],
-  );
+  const fontSize = settings.fontSize;
+  const lineHeight = Math.round(fontSize * settings.lineHeightRatio);
 
   const applyBookmarkState = useCallback(
     (value: boolean, source: BookmarkStateSource): BookmarkState => {
@@ -502,22 +527,43 @@ export default function NovelReaderScreen() {
       }
 
       try {
-        const parsed = JSON.parse(rawSettings) as Partial<ReaderSettings>;
+        const parsed = JSON.parse(rawSettings) as Record<string, unknown>;
         const theme = isReaderTheme(parsed.theme) ? parsed.theme : settings.theme;
-        const nextFontSize = isReaderFontSize(parsed.fontSize)
-          ? parsed.fontSize
-          : 'normal';
-        const lineSpacing = isReaderLineSpacing(parsed.lineSpacing)
-          ? parsed.lineSpacing
-          : 'wide';
+        const legacyFontSize = isReaderFontSize(parsed.fontSize)
+          ? FONT_SIZE_VALUES[parsed.fontSize]
+          : null;
+        const legacyLineHeight = isReaderLineSpacing(parsed.lineSpacing)
+          ? LINE_HEIGHT_RATIOS[parsed.lineSpacing]
+          : null;
         const layout = isReaderLayout(parsed.layout)
           ? parsed.layout
           : 'horizontal';
 
         setSettings({
           theme,
-          fontSize: nextFontSize,
-          lineSpacing,
+          fontSize: clampNumber(parsed.fontSize, 13, 32, legacyFontSize ?? 18),
+          lineHeightRatio: clampNumber(
+            parsed.lineHeightRatio,
+            1.35,
+            2.6,
+            legacyLineHeight ?? 2.08,
+          ),
+          horizontalPadding: clampNumber(
+            parsed.horizontalPadding,
+            8,
+            52,
+            24,
+          ),
+          verticalColumnGap: clampNumber(
+            parsed.verticalColumnGap,
+            0.6,
+            2.8,
+            1.3,
+          ),
+          fontFamily: isReaderFontFamily(parsed.fontFamily)
+            ? parsed.fontFamily
+            : 'serif',
+          keepAwake: parsed.keepAwake !== false,
           layout,
         });
       } catch {
@@ -533,6 +579,19 @@ export default function NovelReaderScreen() {
     // 初回だけ復元する。端末テーマ変更はアプリ全体の設定画面に任せる。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const tag = 'pixiv-novel-reader-reading';
+    if (settings.keepAwake && isScreenFocused) {
+      void activateKeepAwakeAsync(tag).catch(() => {});
+    } else {
+      void deactivateKeepAwake(tag).catch(() => {});
+    }
+
+    return () => {
+      void deactivateKeepAwake(tag).catch(() => {});
+    };
+  }, [isScreenFocused, settings.keepAwake]);
 
   useEffect(() => {
     let isMounted = true;
@@ -706,6 +765,10 @@ export default function NovelReaderScreen() {
 
         setSeriesTitle(result.detail.title);
         setSeriesNovels(result.novels);
+        const statusMap = await getNovelReadingStatuses(
+          result.novels.map((novel) => novel.id),
+        );
+        setSeriesReadingStatuses(Object.fromEntries(statusMap));
         await SecureStore.setItemAsync(
           REFRESH_TOKEN_KEY,
           result.refreshToken,
@@ -1440,7 +1503,9 @@ export default function NovelReaderScreen() {
             background={palette.background}
             blocks={blocks}
             embeddedImages={readerContent.embeddedImages}
+            fontFamily={settings.fontFamily}
             fontSize={fontSize}
+            horizontalPadding={settings.horizontalPadding}
             initialProgress={verticalInitialProgressRef.current}
             lineHeight={lineHeight}
             meta={
@@ -1457,6 +1522,10 @@ export default function NovelReaderScreen() {
                 openUserProfile(detail.user.id);
               }
             }}
+            onHighlight={(blockIndex) => {
+              setHighlightBlockIndex(blockIndex);
+              setIsHighlightsVisible(true);
+            }}
             onBlockChange={setVerticalBlockIndex}
             onProgress={(progress) => {
               setScrollProgress(progress);
@@ -1467,10 +1536,14 @@ export default function NovelReaderScreen() {
             text={palette.text}
             title={readerContent.title ?? detail?.title ?? '無題'}
             toolbar={palette.border}
+            verticalColumnGap={settings.verticalColumnGap}
           />
         ) : (
           <ScrollView
-          contentContainerStyle={styles.readerContent}
+          contentContainerStyle={[
+            styles.readerContent,
+            { paddingHorizontal: settings.horizontalPadding },
+          ]}
           onContentSizeChange={restoreReadingPosition}
           onScroll={handleScroll}
           ref={scrollViewRef}
@@ -1535,8 +1608,13 @@ export default function NovelReaderScreen() {
                 <NovelBlockView
                   block={block}
                   embeddedImages={readerContent.embeddedImages}
+                  fontFamily={settings.fontFamily}
                   fontSize={fontSize}
                   lineHeight={lineHeight}
+                  onLongPress={() => {
+                    setHighlightBlockIndex(index);
+                    setIsHighlightsVisible(true);
+                  }}
                   palette={palette}
                   styles={styles}
                 />
@@ -1713,6 +1791,7 @@ export default function NovelReaderScreen() {
         isLoading={isSeriesLoading}
         muted={palette.muted}
         novels={seriesNovels}
+        readingStatuses={seriesReadingStatuses}
         onClose={() => {
           setIsSeriesVisible(false);
         }}
@@ -1720,6 +1799,14 @@ export default function NovelReaderScreen() {
           void downloadEntireSeries();
         }}
         onNovelPress={openSeriesNovel}
+        onOpenNextUnread={() => {
+          const nextUnread = seriesNovels.find(
+            (novel) => !seriesReadingStatuses[novel.id]?.isFinished,
+          );
+          if (nextUnread) {
+            openSeriesNovel(nextUnread);
+          }
+        }}
         onRetry={() => {
           setSeriesAttempt((current) => current + 1);
         }}
@@ -1758,6 +1845,29 @@ export default function NovelReaderScreen() {
         overlay={palette.overlay}
         text={palette.text}
         visible={isMarksVisible}
+      />
+
+      <ReaderHighlightsModal
+        accent={palette.accent}
+        background={palette.toolbar}
+        border={palette.border}
+        currentBlockIndex={currentHighlightBlockIndex}
+        currentExcerpt={currentHighlightExcerpt}
+        detail={detail}
+        muted={palette.muted}
+        onClose={() => {
+          setIsHighlightsVisible(false);
+          setHighlightBlockIndex(null);
+        }}
+        onJump={(highlight: ReaderHighlight) => {
+          setIsHighlightsVisible(false);
+          setHighlightBlockIndex(null);
+          requestAnimationFrame(() => jumpToBlock(highlight.blockIndex));
+        }}
+        onStatus={showStatus}
+        overlay={palette.overlay}
+        text={palette.text}
+        visible={isHighlightsVisible}
       />
 
       <ReaderSpeechModal
@@ -1839,6 +1949,11 @@ export default function NovelReaderScreen() {
         onOpenMarks={() => {
           setIsMoreVisible(false);
           requestAnimationFrame(() => setIsMarksVisible(true));
+        }}
+        onOpenHighlights={() => {
+          setIsMoreVisible(false);
+          setHighlightBlockIndex(currentMarkBlockIndex);
+          requestAnimationFrame(() => setIsHighlightsVisible(true));
         }}
         onOpenExclusions={() => {
           setIsMoreVisible(false);
@@ -2365,8 +2480,10 @@ function ToolbarSymbolButton({
 interface NovelBlockViewProps {
   block: NovelBlock;
   embeddedImages: Record<string, string>;
+  fontFamily: ReaderFontFamily;
   fontSize: number;
   lineHeight: number;
+  onLongPress: () => void;
   palette: ReaderPalette;
   styles: ReturnType<typeof createStyles>;
 }
@@ -2374,8 +2491,10 @@ interface NovelBlockViewProps {
 function NovelBlockView({
   block,
   embeddedImages,
+  fontFamily,
   fontSize,
   lineHeight,
+  onLongPress,
   palette,
   styles,
 }: NovelBlockViewProps) {
@@ -2383,10 +2502,15 @@ function NovelBlockView({
     case 'text':
       return (
         <Text
+          onLongPress={onLongPress}
           selectable
           style={[
             styles.bodyText,
             {
+              fontFamily:
+                fontFamily === 'serif'
+                  ? Platform.select({ android: 'serif', default: 'Georgia' })
+                  : Platform.select({ android: 'sans-serif', default: 'System' }),
               fontSize,
               lineHeight,
             },
@@ -2397,7 +2521,7 @@ function NovelBlockView({
       );
     case 'chapter':
       return (
-        <Text selectable style={styles.chapterTitle}>
+        <Text onLongPress={onLongPress} selectable style={styles.chapterTitle}>
           {block.title}
         </Text>
       );
@@ -2549,59 +2673,183 @@ function ReaderSettingsModal({
             />
           </View>
 
-          <View style={styles.optionColumns}>
-            <View style={styles.optionColumn}>
-              <Text style={styles.sectionLabel}>文字サイズ</Text>
-              <RadioOption
-                active={settings.fontSize === 'small'}
-                label="小"
-                onPress={() => {
-                  onChange({ ...settings, fontSize: 'small' });
-                }}
-                palette={palette}
-              />
-              <RadioOption
-                active={settings.fontSize === 'normal'}
-                label="普通"
-                onPress={() => {
-                  onChange({ ...settings, fontSize: 'normal' });
-                }}
-                palette={palette}
-              />
-              <RadioOption
-                active={settings.fontSize === 'large'}
-                label="大"
-                onPress={() => {
-                  onChange({ ...settings, fontSize: 'large' });
-                }}
-                palette={palette}
-              />
-            </View>
+          <SettingsSlider
+            label="文字サイズ"
+            maximumValue={32}
+            minimumValue={13}
+            onValueChange={(fontSize) => {
+              onChange({ ...settings, fontSize });
+            }}
+            palette={palette}
+            step={1}
+            styles={styles}
+            value={settings.fontSize}
+            valueText={`${Math.round(settings.fontSize)}px`}
+          />
 
-            <View style={styles.optionColumn}>
-              <Text style={styles.sectionLabel}>行間</Text>
-              <RadioOption
-                active={settings.lineSpacing === 'narrow'}
-                label="せまい"
-                onPress={() => {
-                  onChange({ ...settings, lineSpacing: 'narrow' });
-                }}
-                palette={palette}
-              />
-              <RadioOption
-                active={settings.lineSpacing === 'wide'}
-                label="広い"
-                onPress={() => {
-                  onChange({ ...settings, lineSpacing: 'wide' });
-                }}
-                palette={palette}
-              />
-            </View>
+          <SettingsSlider
+            label="行間"
+            maximumValue={2.6}
+            minimumValue={1.35}
+            onValueChange={(lineHeightRatio) => {
+              onChange({ ...settings, lineHeightRatio });
+            }}
+            palette={palette}
+            step={0.05}
+            styles={styles}
+            value={settings.lineHeightRatio}
+            valueText={`${settings.lineHeightRatio.toFixed(2)}倍`}
+          />
+
+          <SettingsSlider
+            label="左右・上下余白"
+            maximumValue={52}
+            minimumValue={8}
+            onValueChange={(horizontalPadding) => {
+              onChange({ ...settings, horizontalPadding });
+            }}
+            palette={palette}
+            step={2}
+            styles={styles}
+            value={settings.horizontalPadding}
+            valueText={`${Math.round(settings.horizontalPadding)}px`}
+          />
+
+          {settings.layout === 'vertical' ? (
+            <SettingsSlider
+              label="縦書きの列間"
+              maximumValue={2.8}
+              minimumValue={0.6}
+              onValueChange={(verticalColumnGap) => {
+                onChange({ ...settings, verticalColumnGap });
+              }}
+              palette={palette}
+              step={0.1}
+              styles={styles}
+              value={settings.verticalColumnGap}
+              valueText={`${settings.verticalColumnGap.toFixed(1)}文字`}
+            />
+          ) : null}
+
+          <Text style={styles.sectionLabel}>書体</Text>
+          <View style={styles.layoutOptions}>
+            <RadioOption
+              active={settings.fontFamily === 'serif'}
+              label="明朝体"
+              onPress={() => {
+                onChange({ ...settings, fontFamily: 'serif' });
+              }}
+              palette={palette}
+            />
+            <RadioOption
+              active={settings.fontFamily === 'sans'}
+              label="ゴシック体"
+              onPress={() => {
+                onChange({ ...settings, fontFamily: 'sans' });
+              }}
+              palette={palette}
+            />
           </View>
+
+          <SettingsToggleRow
+            label="読書中は画面を消灯しない"
+            onPress={() => {
+              onChange({ ...settings, keepAwake: !settings.keepAwake });
+            }}
+            palette={palette}
+            styles={styles}
+            value={settings.keepAwake}
+          />
           </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
+  );
+}
+
+interface SettingsSliderProps {
+  label: string;
+  maximumValue: number;
+  minimumValue: number;
+  onValueChange: (value: number) => void;
+  palette: ReaderPalette;
+  step: number;
+  styles: ReturnType<typeof createSheetStyles>;
+  value: number;
+  valueText: string;
+}
+
+function SettingsSlider({
+  label,
+  maximumValue,
+  minimumValue,
+  onValueChange,
+  palette,
+  step,
+  styles,
+  value,
+  valueText,
+}: SettingsSliderProps) {
+  return (
+    <View style={styles.sliderSection}>
+      <View style={styles.sliderHeader}>
+        <Text style={styles.sectionLabel}>{label}</Text>
+        <Text style={styles.sliderValue}>{valueText}</Text>
+      </View>
+      <Slider
+        accessibilityLabel={label}
+        maximumTrackTintColor={palette.border}
+        maximumValue={maximumValue}
+        minimumTrackTintColor={palette.accent}
+        minimumValue={minimumValue}
+        onValueChange={onValueChange}
+        step={step}
+        style={styles.slider}
+        thumbTintColor={palette.accent}
+        value={value}
+      />
+    </View>
+  );
+}
+
+function SettingsToggleRow({
+  label,
+  onPress,
+  palette,
+  styles,
+  value,
+}: {
+  label: string;
+  onPress: () => void;
+  palette: ReaderPalette;
+  styles: ReturnType<typeof createSheetStyles>;
+  value: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.settingsToggleRow,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text style={styles.settingsToggleLabel}>{label}</Text>
+      <View
+        style={[
+          styles.settingsSwitchTrack,
+          { backgroundColor: value ? palette.accent : palette.border },
+        ]}
+      >
+        <View
+          style={[
+            styles.settingsSwitchThumb,
+            value && styles.settingsSwitchThumbActive,
+          ]}
+        />
+      </View>
+    </Pressable>
   );
 }
 
@@ -2651,6 +2899,7 @@ interface MoreActionsModalProps {
   onOpenDetail: () => void;
   onOpenExclusions: () => void;
   onOpenMarks: () => void;
+  onOpenHighlights: () => void;
   onOpenNavigator: () => void;
   onOpenPixiv: () => void;
   onOpenSeries: () => void;
@@ -2676,6 +2925,7 @@ function MoreActionsModal({
   onOpenDetail,
   onOpenExclusions,
   onOpenMarks,
+  onOpenHighlights,
   onOpenNavigator,
   onOpenPixiv,
   onOpenSeries,
@@ -2752,6 +3002,12 @@ function MoreActionsModal({
             palette={palette}
           />
           <SheetAction
+            disabled={!canOrganize}
+            label="ハイライト・引用"
+            onPress={onOpenHighlights}
+            palette={palette}
+          />
+          <SheetAction
             label="おすすめ除外を管理"
             onPress={onOpenExclusions}
             palette={palette}
@@ -2820,6 +3076,42 @@ function SheetAction({
       <Text style={[actionStyles.text, { color: palette.text }]}>{label}</Text>
     </Pressable>
   );
+}
+
+function createReaderHighlightExcerpt(
+  blocks: NovelBlock[],
+  blockIndex: number,
+): string {
+  const block = blocks[blockIndex];
+  if (!block) {
+    return '';
+  }
+
+  if (block.type === 'text') {
+    return block.text.trim().replace(/\s+/g, ' ').slice(0, 1000);
+  }
+  if (block.type === 'chapter') {
+    return block.title.trim().replace(/\s+/g, ' ').slice(0, 1000);
+  }
+
+  return createReaderMarkExcerpt(blocks, blockIndex);
+}
+
+function clampNumber(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+  fallback: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
+
+function isReaderFontFamily(value: unknown): value is ReaderFontFamily {
+  return value === 'serif' || value === 'sans';
 }
 
 function isReaderTheme(value: unknown): value is ReaderThemeName {
@@ -3519,14 +3811,55 @@ function createSheetStyles(palette: ReaderPalette) {
       gap: 24,
       paddingVertical: 2,
     },
-    optionColumns: {
-      flexDirection: 'row',
-      gap: 24,
-      paddingTop: 4,
+    sliderSection: {
+      gap: 2,
     },
-    optionColumn: {
+    sliderHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    sliderValue: {
+      color: palette.accent,
+      fontSize: 12,
+      fontWeight: '800',
+    },
+    slider: {
+      width: '100%',
+      height: 42,
+    },
+    settingsToggleRow: {
+      minHeight: 52,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 14,
+      paddingHorizontal: 14,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.border,
+      borderRadius: 13,
+    },
+    settingsToggleLabel: {
       flex: 1,
-      gap: 11,
+      color: palette.text,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    settingsSwitchTrack: {
+      width: 44,
+      height: 26,
+      justifyContent: 'center',
+      paddingHorizontal: 3,
+      borderRadius: 13,
+    },
+    settingsSwitchThumb: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: palette.toolbar,
+    },
+    settingsSwitchThumbActive: {
+      alignSelf: 'flex-end',
     },
     pressed: {
       opacity: 0.62,

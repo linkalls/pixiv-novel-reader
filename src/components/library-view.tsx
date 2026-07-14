@@ -21,8 +21,11 @@ import {
 import {
   clearReadingHistory,
   deleteOfflineNovel,
+  deleteOfflineNovels,
+  deleteReadingHistory,
   listOfflineNovels,
   listReadingHistory,
+  setReadingFinished,
   type LibraryNovel,
   type ReadingHistoryFilter,
   type ReadingHistorySort,
@@ -39,6 +42,7 @@ import {
   type Bookshelf,
   type ReaderMark,
 } from '@/lib/organizer-db';
+import { getOfflineAssetStorageSummary } from '@/lib/offline-assets';
 import { ReadingInsightsView } from '@/components/reading-insights-view';
 import { type AppColors, useAppTheme } from '@/theme';
 
@@ -92,8 +96,30 @@ export function LibraryView({
     useState<ShelfEditorMode>('create');
   const [shelfName, setShelfName] = useState('');
   const [isShelfSaving, setIsShelfSaving] = useState(false);
+  const [selectedNovelIds, setSelectedNovelIds] = useState<Set<number>>(
+    () => new Set(),
+  );
+  const [offlineAssetBytes, setOfflineAssetBytes] = useState(0);
+  const [offlineAssetFiles, setOfflineAssetFiles] = useState(0);
+  const [isBatchBusy, setIsBatchBusy] = useState(false);
 
   const selectedShelf = shelves.find((shelf) => shelf.id === selectedShelfId);
+  const isSelectionMode = selectedNovelIds.size > 0;
+
+  function changeMode(nextMode: LibraryMode) {
+    setSelectedNovelIds(new Set());
+    setMode(nextMode);
+  }
+
+  function toggleSelected(novelId: number) {
+    setSelectedNovelIds((current) => {
+      const next = new Set(current);
+      if (next.has(novelId)) next.delete(novelId);
+      else next.add(novelId);
+      return next;
+    });
+  }
+
 
   const loadItems = useCallback(async () => {
     setIsLoading(true);
@@ -113,7 +139,13 @@ export function LibraryView({
       }
 
       if (mode === 'offline') {
-        setItems(await listOfflineNovels(300));
+        const [offlineItems, storage] = await Promise.all([
+          listOfflineNovels(300),
+          getOfflineAssetStorageSummary(),
+        ]);
+        setItems(offlineItems);
+        setOfflineAssetBytes(storage.assetBytes);
+        setOfflineAssetFiles(storage.assetFiles);
         setMarks([]);
         return;
       }
@@ -160,6 +192,57 @@ export function LibraryView({
   async function removeOffline(novelId: number) {
     await deleteOfflineNovel(novelId);
     await loadItems();
+  }
+
+  async function removeHistory(novelId: number) {
+    await deleteReadingHistory(novelId);
+    await loadItems();
+  }
+
+  async function runBatchAction(action: 'remove' | 'finished' | 'unread') {
+    const ids = [...selectedNovelIds];
+    if (ids.length === 0 || isBatchBusy) return;
+
+    setIsBatchBusy(true);
+    try {
+      if (action === 'finished' || action === 'unread') {
+        for (const novelId of ids) {
+          await setReadingFinished(novelId, action === 'finished');
+        }
+      } else if (mode === 'offline') {
+        await deleteOfflineNovels(ids);
+      } else if (mode === 'shelves' && selectedShelfId) {
+        for (const novelId of ids) {
+          await removeNovelFromBookshelf(selectedShelfId, novelId);
+        }
+      } else if (mode === 'history') {
+        for (const novelId of ids) await deleteReadingHistory(novelId);
+      }
+      setSelectedNovelIds(new Set());
+      await loadItems();
+    } catch (error) {
+      setErrorMessage(toErrorMessage(error));
+    } finally {
+      setIsBatchBusy(false);
+    }
+  }
+
+  function confirmBatchRemove() {
+    const count = selectedNovelIds.size;
+    Alert.alert(
+      `${count}件を削除しますか？`,
+      mode === 'offline'
+        ? '本文と保存済み挿絵を端末から削除します。読書履歴は残ります。'
+        : 'ほかのライブラリ情報には影響しません。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: '削除',
+          style: 'destructive',
+          onPress: () => void runBatchAction('remove'),
+        },
+      ],
+    );
   }
 
   async function removeFromShelf(novelId: number) {
@@ -266,29 +349,95 @@ export function LibraryView({
         <LibraryModeButton
           active={mode === 'history'}
           label="履歴"
-          onPress={() => setMode('history')}
+          onPress={() => changeMode('history')}
         />
         <LibraryModeButton
           active={mode === 'shelves'}
           label="本棚"
-          onPress={() => setMode('shelves')}
+          onPress={() => changeMode('shelves')}
         />
         <LibraryModeButton
           active={mode === 'marks'}
           label="しおり"
-          onPress={() => setMode('marks')}
+          onPress={() => changeMode('marks')}
         />
         <LibraryModeButton
           active={mode === 'offline'}
           label="オフライン"
-          onPress={() => setMode('offline')}
+          onPress={() => changeMode('offline')}
         />
         <LibraryModeButton
           active={mode === 'stats'}
           label="統計"
-          onPress={() => setMode('stats')}
+          onPress={() => changeMode('stats')}
         />
       </View>
+
+      {isSelectionMode ? (
+        <View style={styles.batchToolbar}>
+          <View style={styles.batchHeading}>
+            <Text style={styles.batchCount}>{selectedNovelIds.size}件選択中</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setSelectedNovelIds(new Set())}
+            >
+              <Text style={styles.batchCancel}>選択解除</Text>
+            </Pressable>
+          </View>
+          <View style={styles.batchActions}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={isBatchBusy}
+              onPress={() =>
+                setSelectedNovelIds(new Set(items.map((item) => item.novelId)))
+              }
+              style={({ pressed }) => [styles.batchSecondaryButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.batchSecondaryText}>すべて選択</Text>
+            </Pressable>
+            {mode === 'history' ? (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isBatchBusy}
+                  onPress={() => void runBatchAction('finished')}
+                  style={({ pressed }) => [styles.batchSecondaryButton, pressed && styles.pressed]}
+                >
+                  <Text style={styles.batchSecondaryText}>読了にする</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isBatchBusy}
+                  onPress={() => void runBatchAction('unread')}
+                  style={({ pressed }) => [styles.batchSecondaryButton, pressed && styles.pressed]}
+                >
+                  <Text style={styles.batchSecondaryText}>未読に戻す</Text>
+                </Pressable>
+              </>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              disabled={isBatchBusy}
+              onPress={confirmBatchRemove}
+              style={({ pressed }) => [styles.batchDangerButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.batchDangerText}>{isBatchBusy ? '処理中…' : '削除'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {mode === 'offline' && !isSelectionMode ? (
+        <View style={styles.offlineSummary}>
+          <View>
+            <Text style={styles.offlineSummaryTitle}>オフライン保存</Text>
+            <Text style={styles.offlineSummaryText}>
+              {items.length}作品 ・ 挿絵{offlineAssetFiles}ファイル
+            </Text>
+          </View>
+          <Text style={styles.offlineSummarySize}>{formatBytes(offlineAssetBytes)}</Text>
+        </View>
+      ) : null}
 
       {mode === 'shelves' ? (
         <View style={styles.shelfControls}>
@@ -427,20 +576,27 @@ export function LibraryView({
             <LibraryNovelCard
               item={item}
               mode={mode}
+              selected={selectedNovelIds.has(item.novelId)}
+              selectionMode={isSelectionMode}
               onAuthor={() => onOpenAuthor(item.novelId)}
+              onLongPress={() => toggleSelected(item.novelId)}
+              onSelect={() => toggleSelected(item.novelId)}
               onTagPress={onTagPress}
               onOpen={() => {
-                onOpenNovel(
-                  item.novelId,
-                  mode === 'history' && !item.isFinished,
-                );
+                if (isSelectionMode) {
+                  toggleSelected(item.novelId);
+                  return;
+                }
+                onOpenNovel(item.novelId, mode === 'history' && !item.isFinished);
               }}
               onRemove={
                 mode === 'offline'
                   ? () => void removeOffline(item.novelId)
                   : mode === 'shelves'
                     ? () => void removeFromShelf(item.novelId)
-                    : undefined
+                    : mode === 'history'
+                      ? () => void removeHistory(item.novelId)
+                      : undefined
               }
             />
           )}
@@ -684,24 +840,33 @@ function LibraryNovelCard({
   item,
   mode,
   onAuthor,
+  onLongPress,
   onOpen,
   onRemove,
+  onSelect,
   onTagPress,
+  selected,
+  selectionMode,
 }: {
   item: LibraryNovel;
   mode: LibraryMode;
   onAuthor: () => void;
+  onLongPress: () => void;
   onOpen: () => void;
   onRemove?: () => void;
+  onSelect: () => void;
   onTagPress: (tagName: string) => void;
+  selected: boolean;
+  selectionMode: boolean;
 }) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const progressPercent = Math.round(item.progress * 100);
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, selected && styles.cardSelected]}>
       <Pressable
         accessibilityRole="button"
+        onLongPress={onLongPress}
         onPress={onOpen}
         style={({ pressed }) => [styles.cardMain, pressed && styles.pressed]}
       >
@@ -725,6 +890,20 @@ function LibraryNovelCard({
             <Text numberOfLines={2} style={styles.cardTitle}>
               {item.title}
             </Text>
+            {selectionMode ? (
+              <Pressable
+                accessibilityLabel={selected ? '選択を解除' : '作品を選択'}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: selected }}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  onSelect();
+                }}
+                style={[styles.selectionCheck, selected && styles.selectionCheckActive]}
+              >
+                <Text style={styles.selectionCheckText}>{selected ? '✓' : ''}</Text>
+              </Pressable>
+            ) : null}
             {item.isOffline ? (
               <View style={styles.offlineBadge}>
                 <Text style={styles.offlineBadgeText}>OFFLINE</Text>
@@ -804,7 +983,11 @@ function LibraryNovelCard({
           ]}
         >
           <Text style={styles.removeButtonText}>
-            {mode === 'offline' ? '保存を削除' : '本棚から外す'}
+            {mode === 'offline'
+              ? '保存を削除'
+              : mode === 'history'
+                ? '履歴から削除'
+                : '本棚から外す'}
           </Text>
         </Pressable>
       ) : null}
@@ -905,6 +1088,14 @@ function getEmptyMessage(
     title: `「${shelfName ?? '本棚'}」は空です`,
     description: '読書画面の「…」から本棚へ追加できます。',
   };
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function formatRelativeTime(timestamp: number): string {
@@ -1017,6 +1208,54 @@ function createStyles(colors: AppColors) {
     },
     filterChipText: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
     filterChipTextActive: { color: colors.accentStrong },
+    batchToolbar: {
+      gap: 9,
+      marginHorizontal: 14,
+      marginBottom: 9,
+      padding: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.accent,
+      borderRadius: 15,
+      backgroundColor: colors.accentSoft,
+    },
+    batchHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    batchCount: { color: colors.text, fontSize: 13, fontWeight: '900' },
+    batchCancel: { color: colors.accentStrong, fontSize: 11, fontWeight: '800' },
+    batchActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+    batchSecondaryButton: {
+      minHeight: 36,
+      justifyContent: 'center',
+      paddingHorizontal: 11,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 11,
+      backgroundColor: colors.surface,
+    },
+    batchSecondaryText: { color: colors.text, fontSize: 10, fontWeight: '800' },
+    batchDangerButton: {
+      minHeight: 36,
+      justifyContent: 'center',
+      paddingHorizontal: 13,
+      borderRadius: 11,
+      backgroundColor: colors.danger,
+    },
+    batchDangerText: { color: colors.onAccent, fontSize: 10, fontWeight: '900' },
+    offlineSummary: {
+      minHeight: 62,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginHorizontal: 14,
+      marginBottom: 9,
+      paddingHorizontal: 15,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderRadius: 15,
+      backgroundColor: colors.surface,
+    },
+    offlineSummaryTitle: { color: colors.text, fontSize: 13, fontWeight: '900' },
+    offlineSummaryText: { color: colors.textMuted, fontSize: 10, marginTop: 3 },
+    offlineSummarySize: { color: colors.accentStrong, fontSize: 15, fontWeight: '900' },
     shelfControls: { gap: 7, paddingHorizontal: 16, paddingBottom: 8 },
     shelfTabs: { gap: 7 },
     shelfChip: { minHeight: 38, justifyContent: 'center', paddingHorizontal: 13, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 12, backgroundColor: colors.surface },
@@ -1043,6 +1282,21 @@ function createStyles(colors: AppColors) {
       borderRadius: 20,
       backgroundColor: colors.surface,
     },
+    cardSelected: {
+      borderColor: colors.accent,
+      backgroundColor: colors.accentSoft,
+    },
+    selectionCheck: {
+      width: 26,
+      height: 26,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      borderRadius: 13,
+    },
+    selectionCheckActive: { borderColor: colors.accent, backgroundColor: colors.accent },
+    selectionCheckText: { color: colors.onAccent, fontSize: 14, fontWeight: '900' },
     cardMain: { flexDirection: 'row', gap: 15, padding: 15 },
     cover: {
       width: 92,

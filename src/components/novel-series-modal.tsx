@@ -1,4 +1,5 @@
 import type { PixivNovelItem } from '@book000/pixivts';
+import type { NovelReadingStatus } from '@/lib/library-db';
 import { useMemo } from 'react';
 import {
   ActivityIndicator,
@@ -21,9 +22,11 @@ interface NovelSeriesModalProps {
   downloadProgress: string | null;
   muted: string;
   novels: PixivNovelItem[];
+  readingStatuses: Record<number, NovelReadingStatus>;
   onClose: () => void;
   onDownloadAll: () => void;
   onNovelPress: (novel: PixivNovelItem) => void;
+  onOpenNextUnread: () => void;
   onRetry: () => void;
   overlay: string;
   seriesTitle: string;
@@ -42,9 +45,11 @@ export function NovelSeriesModal({
   downloadProgress,
   muted,
   novels,
+  readingStatuses,
   onClose,
   onDownloadAll,
   onNovelPress,
+  onOpenNextUnread,
   onRetry,
   overlay,
   seriesTitle,
@@ -54,6 +59,12 @@ export function NovelSeriesModal({
   const styles = useMemo(
     () => createStyles({ accent, background, border, muted, overlay, text }),
     [accent, background, border, muted, overlay, text],
+  );
+  const finishedCount = novels.filter(
+    (novel) => readingStatuses[novel.id]?.isFinished,
+  ).length;
+  const nextUnread = novels.find(
+    (novel) => !readingStatuses[novel.id]?.isFinished,
   );
 
   return (
@@ -72,7 +83,9 @@ export function NovelSeriesModal({
               <Text numberOfLines={2} style={styles.title}>
                 {seriesTitle}
               </Text>
-              <Text style={styles.count}>{novels.length}話</Text>
+              <Text style={styles.count}>
+                {novels.length}話 ・ {finishedCount}話読了
+              </Text>
             </View>
             <Pressable
               accessibilityLabel="シリーズ一覧を閉じる"
@@ -86,6 +99,29 @@ export function NovelSeriesModal({
               <Text style={styles.closeText}>×</Text>
             </Pressable>
           </View>
+
+          {nextUnread ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={onOpenNextUnread}
+              style={({ pressed }) => [
+                styles.nextUnreadButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.nextUnreadTextArea}>
+                <Text style={styles.nextUnreadLabel}>次の未読話</Text>
+                <Text numberOfLines={1} style={styles.nextUnreadTitle}>
+                  {nextUnread.title}
+                </Text>
+              </View>
+              <Text style={styles.nextUnreadArrow}>›</Text>
+            </Pressable>
+          ) : novels.length > 0 ? (
+            <View style={styles.seriesComplete}>
+              <Text style={styles.seriesCompleteText}>シリーズを全話読了済み</Text>
+            </View>
+          ) : null}
 
           <Pressable
             accessibilityRole="button"
@@ -139,6 +175,12 @@ export function NovelSeriesModal({
             >
               {novels.map((novel, index) => {
                 const isCurrent = novel.id === currentNovelId;
+                const readingStatus = readingStatuses[novel.id];
+                const statusLabel = readingStatus?.isFinished
+                  ? '読了'
+                  : readingStatus && readingStatus.progress > 0
+                    ? `${Math.max(1, Math.round(readingStatus.progress * 100))}%`
+                    : '未読';
 
                 return (
                   <Pressable
@@ -160,10 +202,44 @@ export function NovelSeriesModal({
                       <Text numberOfLines={2} style={styles.rowTitle}>
                         {novel.title}
                       </Text>
-                      <Text style={styles.meta}>
-                        {novel.textLength.toLocaleString()}字
-                        {isCurrent ? '　現在読んでいる話' : ''}
-                      </Text>
+                      <View style={styles.rowMetaLine}>
+                        <Text style={styles.meta}>
+                          {novel.textLength.toLocaleString()}字
+                          {isCurrent ? '　現在読んでいる話' : ''}
+                        </Text>
+                        <View style={styles.statusRow}>
+                          <View
+                            style={[
+                              styles.statusBadge,
+                              readingStatus?.isFinished && styles.statusBadgeFinished,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.statusText,
+                                readingStatus?.isFinished && styles.statusTextFinished,
+                              ]}
+                            >
+                              {statusLabel}
+                            </Text>
+                          </View>
+                          {readingStatus?.isOffline ? (
+                            <View style={styles.offlineStatusBadge}>
+                              <Text style={styles.offlineStatusText}>保存済み</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                      {readingStatus && !readingStatus.isFinished && readingStatus.progress > 0 ? (
+                        <View style={styles.progressTrack}>
+                          <View
+                            style={[
+                              styles.progressValue,
+                              { width: `${Math.round(readingStatus.progress * 100)}%` },
+                            ]}
+                          />
+                        </View>
+                      ) : null}
                     </View>
                     <Text style={styles.arrow}>{isCurrent ? '●' : '›'}</Text>
                   </Pressable>
@@ -253,6 +329,30 @@ function createStyles(colors: {
       fontSize: 22,
       lineHeight: 25,
     },
+    nextUnreadButton: {
+      minHeight: 58,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      marginTop: 12,
+      paddingHorizontal: 15,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.accent,
+      borderRadius: 14,
+      backgroundColor: `${colors.accent}12`,
+    },
+    nextUnreadTextArea: { flex: 1, gap: 2 },
+    nextUnreadLabel: { color: colors.accent, fontSize: 10, fontWeight: '900' },
+    nextUnreadTitle: { color: colors.text, fontSize: 13, fontWeight: '800' },
+    nextUnreadArrow: { color: colors.accent, fontSize: 24, fontWeight: '900' },
+    seriesComplete: {
+      alignItems: 'center',
+      marginTop: 12,
+      paddingVertical: 13,
+      borderRadius: 13,
+      backgroundColor: `${colors.accent}12`,
+    },
+    seriesCompleteText: { color: colors.accent, fontSize: 12, fontWeight: '900' },
     downloadButton: {
       minHeight: 58,
       flexDirection: 'row',
@@ -332,6 +432,32 @@ function createStyles(colors: {
       flex: 1,
       gap: 5,
     },
+    rowMetaLine: { gap: 5 },
+    statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+    statusBadge: {
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+      borderRadius: 999,
+      backgroundColor: colors.border,
+    },
+    statusBadgeFinished: { backgroundColor: `${colors.accent}18` },
+    statusText: { color: colors.muted, fontSize: 9, fontWeight: '800' },
+    statusTextFinished: { color: colors.accent },
+    offlineStatusBadge: {
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+      borderRadius: 999,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    offlineStatusText: { color: colors.muted, fontSize: 9, fontWeight: '800' },
+    progressTrack: {
+      height: 3,
+      overflow: 'hidden',
+      borderRadius: 999,
+      backgroundColor: colors.border,
+    },
+    progressValue: { height: '100%', borderRadius: 999, backgroundColor: colors.accent },
     rowTitle: {
       color: colors.text,
       fontSize: 14,

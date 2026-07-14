@@ -303,6 +303,45 @@ export async function listReadingHistory(
   return rows.map(mapHistoryRow);
 }
 
+export async function deleteReadingHistory(novelId: number): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(
+    'DELETE FROM reading_history WHERE novel_id = ?',
+    novelId,
+  );
+}
+
+export async function setReadingFinished(
+  novelId: number,
+  isFinished: boolean,
+): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(
+    `
+      UPDATE reading_history
+      SET is_finished = ?,
+          progress = CASE
+            WHEN ? = 1 THEN 1
+            WHEN progress >= 0.985 THEN 0
+            ELSE progress
+          END
+      WHERE novel_id = ?
+    `,
+    isFinished ? 1 : 0,
+    isFinished ? 1 : 0,
+    novelId,
+  );
+}
+
+export async function deleteOfflineNovels(novelIds: readonly number[]): Promise<void> {
+  const uniqueIds = Array.from(
+    new Set(novelIds.filter((id) => Number.isInteger(id) && id > 0)),
+  );
+  for (const novelId of uniqueIds) {
+    await deleteOfflineNovel(novelId);
+  }
+}
+
 export async function clearReadingHistory(): Promise<void> {
   const database = await getDatabase();
   await database.runAsync('DELETE FROM reading_history');

@@ -11,16 +11,20 @@ interface NovelCardProps {
   rank?: number;
   readingStatus?: NovelReadingStatus;
   onAuthorPress?: () => void;
+  onAuthorLongPress?: () => void;
   onPress: () => void;
   onTagPress?: (tagName: string) => void;
+  onTagLongPress?: (tagName: string) => void;
 }
 
 export function NovelCard({
   novel,
   rank,
   readingStatus,
+  onAuthorLongPress,
   onAuthorPress,
   onPress,
+  onTagLongPress,
   onTagPress,
 }: NovelCardProps) {
   const { colors } = useAppTheme();
@@ -67,6 +71,10 @@ export function NovelCard({
             accessibilityLabel={`作者「${novel.user.name}」のプロフィールを開く`}
             accessibilityRole="link"
             hitSlop={6}
+            onLongPress={(event) => {
+              event.stopPropagation();
+              onAuthorLongPress?.();
+            }}
             onPress={(event) => {
               event.stopPropagation();
               onAuthorPress();
@@ -126,6 +134,10 @@ export function NovelCard({
                 accessibilityLabel={`タグ「${tag.name}」で検索`}
                 accessibilityRole="button"
                 key={tag.name}
+                onLongPress={(event) => {
+                  event.stopPropagation();
+                  onTagLongPress?.(tag.name);
+                }}
                 onPress={(event) => {
                   event.stopPropagation();
                   onTagPress?.(tag.name);

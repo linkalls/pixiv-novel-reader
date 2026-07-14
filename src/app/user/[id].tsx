@@ -1,4 +1,5 @@
 import type { PixivNovelItem } from '@book000/pixivts';
+import * as SecureStore from 'expo-secure-store';
 import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -28,9 +29,12 @@ import { cacheNovelForRoute } from '@/lib/novel-route-cache';
 import {
   fetchUserNovels,
   fetchUserProfile,
+  setUserFollow,
   type UserProfileResult,
 } from '@/lib/pixiv';
 import { type AppColors, useAppTheme } from '@/theme';
+
+const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 
 export default function UserProfileScreen() {
   const router = useRouter();
@@ -53,6 +57,7 @@ export default function UserProfileScreen() {
   const [isLoading, setIsLoading] = useState(isValidUserId);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isFollowLoading, setIsFollowLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(
     isValidUserId ? null : 'ユーザーIDを読み取れませんでした',
   );
@@ -235,9 +240,35 @@ export default function UserProfileScreen() {
     }, [novels, readReadingStatuses]),
   );
 
+  async function toggleFollow() {
+    if (!profileResult || isFollowLoading) {
+      return;
+    }
+
+    const previous = profileResult;
+    const shouldFollow = !Boolean(profileResult.user.isFollowed);
+    setIsFollowLoading(true);
+    setProfileResult({
+      ...profileResult,
+      user: { ...profileResult.user, isFollowed: shouldFollow },
+    });
+
+    try {
+      const refreshToken = await setUserFollow(userId, shouldFollow);
+      await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
+    } catch (error) {
+      setProfileResult(previous);
+      setErrorMessage(`フォローを変更できませんでした: ${toErrorMessage(error)}`);
+    } finally {
+      setIsFollowLoading(false);
+    }
+  }
+
   const listHeader = profileResult ? (
     <ProfileHeader
       colors={colors}
+      isFollowLoading={isFollowLoading}
+      onToggleFollow={() => void toggleFollow()}
       profileResult={profileResult}
       styles={styles}
     />
@@ -357,10 +388,14 @@ export default function UserProfileScreen() {
 
 function ProfileHeader({
   colors,
+  isFollowLoading,
+  onToggleFollow,
   profileResult,
   styles,
 }: {
   colors: AppColors;
+  isFollowLoading: boolean;
+  onToggleFollow: () => void;
   profileResult: UserProfileResult;
   styles: ReturnType<typeof createStyles>;
 }) {
@@ -401,6 +436,34 @@ function ProfileHeader({
         <Text style={styles.profileName}>{user.name}</Text>
         <Text style={styles.profileAccount}>@{user.account}</Text>
       </View>
+
+      <Pressable
+        accessibilityRole="button"
+        disabled={isFollowLoading}
+        onPress={onToggleFollow}
+        style={({ pressed }) => [
+          styles.followButton,
+          user.isFollowed && styles.followButtonActive,
+          pressed && styles.pressed,
+          isFollowLoading && styles.disabled,
+        ]}
+      >
+        {isFollowLoading ? (
+          <ActivityIndicator
+            color={user.isFollowed ? colors.text : colors.onAccent}
+            size="small"
+          />
+        ) : (
+          <Text
+            style={[
+              styles.followButtonText,
+              user.isFollowed && styles.followButtonTextActive,
+            ]}
+          >
+            {user.isFollowed ? 'フォロー中' : 'フォローする'}
+          </Text>
+        )}
+      </Pressable>
 
       {metadata.length > 0 ? (
         <View style={styles.metadataRow}>
@@ -565,6 +628,25 @@ function createStyles(colors: AppColors) {
       fontSize: 13,
       fontWeight: '700',
     },
+    followButton: {
+      minHeight: 42,
+      marginHorizontal: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 14,
+      backgroundColor: colors.accent,
+    },
+    followButtonActive: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    followButtonText: {
+      color: colors.onAccent,
+      fontSize: 13,
+      fontWeight: '900',
+    },
+    followButtonTextActive: { color: colors.text },
     metadataRow: {
       flexDirection: 'row',
       flexWrap: 'wrap',
@@ -708,6 +790,9 @@ function createStyles(colors: AppColors) {
       color: colors.accent,
       fontSize: 11,
       fontWeight: '900',
+    },
+    disabled: {
+      opacity: 0.5,
     },
     pressed: {
       opacity: 0.65,

@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AdvancedSearchModal } from '@/components/advanced-search-modal';
 import { LibraryView } from '@/components/library-view';
 import { NovelCard } from '@/components/novel-card';
 import { PixivLoginModal } from '@/components/pixiv-login-modal';
@@ -28,12 +29,22 @@ import {
   type LibraryNovel,
   type NovelReadingStatus,
 } from '@/lib/library-db';
+import {
+  applyAdvancedSearchFilters,
+  filterMutedNovels,
+  getAdvancedSearchFilters,
+  muteAuthor,
+  muteTag,
+  saveAdvancedSearchFilters,
+  type AdvancedSearchFilters,
+} from '@/lib/content-preferences-db';
 import { subscribeNovelChanged } from '@/lib/novel-events';
 import { cacheNovelForRoute } from '@/lib/novel-route-cache';
 import {
   connectPixiv,
   disconnectPixiv,
   fetchBookmarkedNovels,
+  fetchFollowedNovels,
   fetchNovelDetail,
   fetchNovelRanking,
   fetchRecommendedNovels,
@@ -58,6 +69,7 @@ const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 
 type AppTab =
   | 'recommended'
+  | 'following'
   | 'bookmarks'
   | 'ranking'
   | 'search'
@@ -91,6 +103,7 @@ const EMPTY_FEED: FeedState = {
 
 const TAB_ITEMS: { key: AppTab; label: string; icon: string }[] = [
   { key: 'recommended', label: 'おすすめ', icon: '✦' },
+  { key: 'following', label: '新着', icon: '◉' },
   { key: 'bookmarks', label: 'ブックマーク', icon: '🔖' },
   { key: 'ranking', label: 'ランキング', icon: '🏆' },
   { key: 'search', label: '検索', icon: '🔎' },
@@ -137,6 +150,7 @@ export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<AppTab>('recommended');
   const [feeds, setFeeds] = useState<Record<AppTab, FeedState>>({
     recommended: { ...EMPTY_FEED },
+    following: { ...EMPTY_FEED },
     bookmarks: { ...EMPTY_FEED },
     ranking: { ...EMPTY_FEED },
     search: { ...EMPTY_FEED },
@@ -147,6 +161,7 @@ export default function HomeScreen() {
   const inFlightPagesRef = useRef(new Set<string>());
   const feedRequestVersionRef = useRef<Record<AppTab, number>>({
     recommended: 0,
+    following: 0,
     bookmarks: 0,
     ranking: 0,
     search: 0,
@@ -174,6 +189,17 @@ export default function HomeScreen() {
   const [searchTarget, setSearchTarget] =
     useState<NovelSearchTarget>('keyword');
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
+  const [searchFilters, setSearchFilters] = useState<AdvancedSearchFilters>({
+    minCharacters: null,
+    maxCharacters: null,
+    minBookmarks: null,
+    includeR18: true,
+    includeAi: true,
+    seriesMode: 'all',
+    hideFinished: false,
+  });
+  const [isAdvancedSearchVisible, setIsAdvancedSearchVisible] = useState(false);
+  const searchFiltersRef = useRef(searchFilters);
   const [readingStatuses, setReadingStatuses] = useState<
     Record<number, NovelReadingStatus>
   >({});
@@ -286,6 +312,9 @@ export default function HomeScreen() {
           case 'recommended':
             result = await fetchRecommendedNovels(nextUrl);
             break;
+          case 'following':
+            result = await fetchFollowedNovels(nextUrl);
+            break;
           case 'bookmarks':
             result = await fetchBookmarkedNovels(
               options?.bookmarkVisibility ?? bookmarkVisibility,
@@ -327,9 +356,27 @@ export default function HomeScreen() {
           await reloadSearchHistory();
         }
 
+        let filteredPageNovels = await filterMutedNovels(result.novels);
+
+        if (tab === 'search') {
+          const pageStatuses = await getNovelReadingStatuses(
+            filteredPageNovels.map((novel) => novel.id),
+          );
+          const finishedNovelIds = new Set(
+            [...pageStatuses.entries()]
+              .filter(([, status]) => status.isFinished)
+              .map(([novelId]) => novelId),
+          );
+          filteredPageNovels = applyAdvancedSearchFilters(
+            filteredPageNovels,
+            searchFiltersRef.current,
+            finishedNovelIds,
+          );
+        }
+
         const nextNovels = append
-          ? mergeNovels(feedsRef.current[tab].novels, result.novels)
-          : result.novels;
+          ? mergeNovels(feedsRef.current[tab].novels, filteredPageNovels)
+          : filteredPageNovels;
 
         updateFeed(tab, () => ({
           novels: nextNovels,
@@ -524,6 +571,7 @@ export default function HomeScreen() {
     setAuthError(null);
     const resetFeeds: Record<AppTab, FeedState> = {
       recommended: { ...EMPTY_FEED },
+      following: { ...EMPTY_FEED },
       bookmarks: { ...EMPTY_FEED },
       ranking: { ...EMPTY_FEED },
       search: { ...EMPTY_FEED },
@@ -597,6 +645,67 @@ export default function HomeScreen() {
     await reloadSearchHistory();
   }
 
+  function confirmMuteAuthor(novel: PixivNovelItem) {
+    Alert.alert(
+      `「${novel.user.name}」をミュートしますか？`,
+      'おすすめ・新着・ランキング・検索・ブックマークの一覧から非表示にします。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: 'ミュート',
+          style: 'destructive',
+          onPress: () => {
+            void muteAuthor(novel.user.id, novel.user.name).then(() => {
+              removeNovelsFromFeeds((item) => item.user.id === novel.user.id);
+            });
+          },
+        },
+      ],
+    );
+  }
+
+  function confirmMuteTag(tagName: string) {
+    Alert.alert(
+      `#${tagName} をミュートしますか？`,
+      'このタグを含む作品をすべての一覧から非表示にします。',
+      [
+        { text: 'キャンセル', style: 'cancel' },
+        {
+          text: 'ミュート',
+          style: 'destructive',
+          onPress: () => {
+            void muteTag(tagName).then(() => {
+              const normalized = tagName.trim().replace(/^#+/, '').toLocaleLowerCase('ja-JP');
+              removeNovelsFromFeeds((item) =>
+                item.tags.some(
+                  (tag) =>
+                    tag.name.trim().replace(/^#+/, '').toLocaleLowerCase('ja-JP') ===
+                    normalized,
+                ),
+              );
+            });
+          },
+        },
+      ],
+    );
+  }
+
+  function removeNovelsFromFeeds(
+    shouldRemove: (novel: PixivNovelItem) => boolean,
+  ) {
+    setFeeds((current) => {
+      const next = { ...current };
+      for (const tab of Object.keys(next) as AppTab[]) {
+        next[tab] = {
+          ...next[tab],
+          novels: next[tab].novels.filter((novel) => !shouldRemove(novel)),
+        };
+      }
+      feedsRef.current = next;
+      return next;
+    });
+  }
+
   const handleNovelChanged = useCallback((changedNovel: PixivNovelItem) => {
     setFeeds((current) => {
       const next = { ...current };
@@ -619,6 +728,15 @@ export default function HomeScreen() {
 
   const activeFeed = feeds[activeTab];
 
+  useEffect(() => {
+    void getAdvancedSearchFilters()
+      .then((filters) => {
+        searchFiltersRef.current = filters;
+        setSearchFilters(filters);
+      })
+      .catch(() => {});
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       void reloadSearchHistory();
@@ -633,6 +751,8 @@ export default function HomeScreen() {
     switch (activeTab) {
       case 'recommended':
         return 'おすすめ小説';
+      case 'following':
+        return 'フォロー新着';
       case 'bookmarks':
         return 'マイブックマーク';
       case 'ranking':
@@ -932,6 +1052,9 @@ export default function HomeScreen() {
                 setRankingMode(mode);
                 void requestFeed('ranking', { rankingMode: mode });
               }}
+              onOpenAdvancedSearch={() => {
+                setIsAdvancedSearchVisible(true);
+              }}
               onClearSearchHistory={() => {
                 void clearSearchHistory();
               }}
@@ -959,6 +1082,7 @@ export default function HomeScreen() {
               onToggleSearchHistoryPin={(item) => {
                 void toggleSearchHistoryPin(item);
               }}
+              activeSearchFilterCount={countActiveSearchFilters(searchFilters)}
               rankingMode={rankingMode}
               searchHistory={searchHistory}
               searchSort={searchSort}
@@ -991,6 +1115,7 @@ export default function HomeScreen() {
         renderItem={({ item, index }) => (
           <NovelCard
             novel={item}
+            onAuthorLongPress={() => confirmMuteAuthor(item)}
             onAuthorPress={() => {
               router.push({
                 pathname: '/user/[id]',
@@ -998,6 +1123,7 @@ export default function HomeScreen() {
               });
             }}
             readingStatus={readingStatuses[item.id]}
+            onTagLongPress={confirmMuteTag}
             onTagPress={openTagSearch}
             onPress={() => {
               cacheNovelForRoute(item);
@@ -1015,6 +1141,25 @@ export default function HomeScreen() {
         />
       )}
 
+
+      <AdvancedSearchModal
+        filters={searchFilters}
+        onApply={(filters) => {
+          searchFiltersRef.current = filters;
+          setSearchFilters(filters);
+          setIsAdvancedSearchVisible(false);
+          void saveAdvancedSearchFilters(filters);
+          if (searchWord.trim().length > 0) {
+            void requestFeed('search', {
+              searchWord: searchWord.trim(),
+              searchSort,
+              searchTarget,
+            });
+          }
+        }}
+        onClose={() => setIsAdvancedSearchVisible(false)}
+        visible={isAdvancedSearchVisible}
+      />
 
       <Modal
         animationType="fade"
@@ -1077,6 +1222,7 @@ export default function HomeScreen() {
 }
 
 interface FeedControlsProps {
+  activeSearchFilterCount: number;
   activeTab: AppTab;
   bookmarkVisibility: BookmarkVisibility;
   rankingMode: NovelRanking;
@@ -1088,6 +1234,7 @@ interface FeedControlsProps {
   onBookmarkVisibilityChange: (value: BookmarkVisibility) => void;
   onClearSearchHistory: () => void;
   onDeleteSearchHistoryItem: (item: SearchHistoryItem) => void;
+  onOpenAdvancedSearch: () => void;
   onRankingModeChange: (value: NovelRanking) => void;
   onRunSearchHistoryItem: (item: SearchHistoryItem) => void;
   onSearchSortChange: (value: NovelSearchSort) => void;
@@ -1097,6 +1244,7 @@ interface FeedControlsProps {
 }
 
 function FeedControls({
+  activeSearchFilterCount,
   activeTab,
   bookmarkVisibility,
   rankingMode,
@@ -1108,6 +1256,7 @@ function FeedControls({
   onBookmarkVisibilityChange,
   onClearSearchHistory,
   onDeleteSearchHistoryItem,
+  onOpenAdvancedSearch,
   onRankingModeChange,
   onRunSearchHistoryItem,
   onSearchSortChange,
@@ -1126,6 +1275,17 @@ function FeedControls({
         <Text style={styles.feedIntroTitle}>おすすめの小説</Text>
         <Text style={styles.feedIntroText}>
           Pixivのおすすめから小説のみを表示します。
+        </Text>
+      </View>
+    );
+  }
+
+  if (activeTab === 'following') {
+    return (
+      <View style={styles.feedIntro}>
+        <Text style={styles.feedIntroTitle}>フォロー中の作者の新着</Text>
+        <Text style={styles.feedIntroText}>
+          フォロー中ユーザーの最近の小説を投稿日順でまとめます。
         </Text>
       </View>
     );
@@ -1205,6 +1365,23 @@ function FeedControls({
           <Text style={styles.searchButtonText}>検索</Text>
         </Pressable>
       </View>
+
+      <Pressable
+        accessibilityRole="button"
+        onPress={onOpenAdvancedSearch}
+        style={({ pressed }) => [
+          styles.advancedSearchButton,
+          pressed && styles.pressed,
+        ]}
+      >
+        <Text style={styles.advancedSearchButtonText}>詳細条件</Text>
+        <Text style={styles.advancedSearchButtonMeta}>
+          {activeSearchFilterCount > 0
+            ? `${activeSearchFilterCount}件の条件を適用中`
+            : '文字数・人気度・R-18・AI・シリーズ・読了状態'}
+        </Text>
+        <Text style={styles.advancedSearchArrow}>›</Text>
+      </Pressable>
 
       {pinnedSearches.length > 0 ? (
         <View style={styles.searchHistorySection}>
@@ -1546,6 +1723,18 @@ function ListSeparator() {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   return <View style={styles.separator} />;
+}
+
+function countActiveSearchFilters(filters: AdvancedSearchFilters): number {
+  return [
+    filters.minCharacters !== null,
+    filters.maxCharacters !== null,
+    filters.minBookmarks !== null,
+    !filters.includeR18,
+    !filters.includeAi,
+    filters.seriesMode !== 'all',
+    filters.hideFinished,
+  ].filter(Boolean).length;
 }
 
 function mergeNovels(
@@ -1913,6 +2102,33 @@ function createStyles(colors: AppColors) {
   },
   filterChipTextActive: {
     color: colors.onAccent,
+  },
+  advancedSearchButton: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 15,
+    backgroundColor: colors.surface,
+  },
+  advancedSearchButtonText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  advancedSearchButtonMeta: {
+    flex: 1,
+    color: colors.textMuted,
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  advancedSearchArrow: {
+    color: colors.accentStrong,
+    fontSize: 20,
+    fontWeight: '900',
   },
   searchControls: {
     gap: 10,

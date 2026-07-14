@@ -2,12 +2,19 @@ import {
   deleteAsync,
   documentDirectory,
   downloadAsync,
+  getInfoAsync,
   makeDirectoryAsync,
+  readDirectoryAsync,
 } from 'expo-file-system/legacy';
 
 import type { NovelReaderContent } from './pixiv';
 
 const OFFLINE_ROOT_NAME = 'pixiv-novel-reader/offline-assets';
+
+export interface OfflineStorageSummary {
+  assetBytes: number;
+  assetFiles: number;
+}
 
 export interface OfflineImageProgress {
   completed: number;
@@ -65,6 +72,44 @@ export async function localizeNovelImages(
     ...content,
     embeddedImages: localizedImages,
   };
+}
+
+export async function getOfflineAssetStorageSummary(): Promise<OfflineStorageSummary> {
+  if (!documentDirectory) {
+    return { assetBytes: 0, assetFiles: 0 };
+  }
+
+  const root = `${documentDirectory}${OFFLINE_ROOT_NAME}`;
+  const rootInfo = await getInfoAsync(root).catch(() => null);
+  if (!rootInfo?.exists || !rootInfo.isDirectory) {
+    return { assetBytes: 0, assetFiles: 0 };
+  }
+
+  return readDirectorySize(root);
+}
+
+async function readDirectorySize(directory: string): Promise<OfflineStorageSummary> {
+  const names = await readDirectoryAsync(directory).catch(() => []);
+  let assetBytes = 0;
+  let assetFiles = 0;
+
+  for (const name of names) {
+    const uri = `${directory}/${name}`;
+    const info = await getInfoAsync(uri).catch(() => null);
+    if (!info?.exists) {
+      continue;
+    }
+    if (info.isDirectory) {
+      const nested = await readDirectorySize(uri);
+      assetBytes += nested.assetBytes;
+      assetFiles += nested.assetFiles;
+    } else {
+      assetBytes += typeof info.size === 'number' ? info.size : 0;
+      assetFiles += 1;
+    }
+  }
+
+  return { assetBytes, assetFiles };
 }
 
 export async function deleteNovelOfflineAssets(novelId: number): Promise<void> {

@@ -1,5 +1,6 @@
 import {
   BookmarkRestrict,
+  FollowRestrict,
   NovelRankingMode,
   parseNextUrl,
   PixivClient,
@@ -176,6 +177,61 @@ export async function fetchRecommendedNovels(
     nextUrl: page.nextUrl,
     refreshToken: requireClient().getRefreshToken(),
   };
+}
+
+export async function fetchFollowedNovels(
+  nextUrl?: string | null,
+): Promise<NovelPageResult> {
+  const cursor = nextUrl ? parseNextUrl(nextUrl) : {};
+  const page = await performPixivRequest((client) =>
+    client.users.following({
+      userId: client.userId,
+      restrict: FollowRestrict.PUBLIC,
+      offset: cursor.offset,
+    }),
+  );
+
+  const seenIds = new Set<number>();
+  const novels = page.userPreviews
+    .flatMap((preview) => preview.novels)
+    .filter((novel) => {
+      if (seenIds.has(novel.id)) {
+        return false;
+      }
+      seenIds.add(novel.id);
+      return true;
+    })
+    .sort(
+      (left, right) =>
+        new Date(right.createDate).getTime() -
+        new Date(left.createDate).getTime(),
+    );
+
+  return {
+    novels,
+    nextUrl: page.nextUrl,
+    refreshToken: requireClient().getRefreshToken(),
+  };
+}
+
+export async function setUserFollow(
+  userId: number,
+  shouldFollow: boolean,
+): Promise<string> {
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw new Error('ユーザーIDが不正です');
+  }
+
+  await performPixivRequest((client) =>
+    shouldFollow
+      ? client.users.followAdd({
+          userId,
+          restrict: FollowRestrict.PUBLIC,
+        })
+      : client.users.followDelete({ userId }),
+  );
+
+  return requireClient().getRefreshToken();
 }
 
 export async function fetchBookmarkedNovels(

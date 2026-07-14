@@ -14,19 +14,23 @@ interface VerticalReaderViewProps {
   background: string;
   blocks: NovelBlock[];
   embeddedImages: Record<string, string>;
+  fontFamily: 'serif' | 'sans';
   fontSize: number;
+  horizontalPadding: number;
   initialProgress: number;
   lineHeight: number;
   meta: string | null;
   muted: string;
   onActivity: () => void;
   onAuthorPress: () => void;
+  onHighlight: (blockIndex: number) => void;
   onBlockChange: (blockIndex: number) => void;
   onProgress: (progress: number, scrollOffset: number) => void;
   seriesTitle: string | null;
   text: string;
   title: string;
   toolbar: string;
+  verticalColumnGap: number;
 }
 
 interface VerticalReaderMessage {
@@ -45,7 +49,9 @@ export const VerticalReaderView = forwardRef<
     background,
     blocks,
     embeddedImages,
+    fontFamily,
     fontSize,
+    horizontalPadding,
     initialProgress,
     lineHeight,
     meta,
@@ -53,11 +59,13 @@ export const VerticalReaderView = forwardRef<
     onActivity,
     onAuthorPress,
     onBlockChange,
+    onHighlight,
     onProgress,
     seriesTitle,
     text,
     title,
     toolbar,
+    verticalColumnGap,
   },
   forwardedRef,
 ) {
@@ -69,7 +77,9 @@ export const VerticalReaderView = forwardRef<
         background,
         blocks,
         embeddedImages,
+        fontFamily,
         fontSize,
+        horizontalPadding,
         initialProgress,
         lineHeight,
         meta,
@@ -78,13 +88,16 @@ export const VerticalReaderView = forwardRef<
         text,
         title,
         toolbar,
+        verticalColumnGap,
       }),
     [
       authorName,
       background,
       blocks,
       embeddedImages,
+      fontFamily,
       fontSize,
+      horizontalPadding,
       initialProgress,
       lineHeight,
       meta,
@@ -93,6 +106,7 @@ export const VerticalReaderView = forwardRef<
       text,
       title,
       toolbar,
+      verticalColumnGap,
     ],
   );
 
@@ -132,6 +146,13 @@ export const VerticalReaderView = forwardRef<
 
     if (message.type === 'author') {
       onAuthorPress();
+    }
+
+    if (
+      message.type === 'highlight' &&
+      typeof message.blockIndex === 'number'
+    ) {
+      onHighlight(Math.max(0, Math.floor(message.blockIndex)));
     }
 
     if (
@@ -180,7 +201,9 @@ function buildVerticalReaderHtml({
   background,
   blocks,
   embeddedImages,
+  fontFamily,
   fontSize,
+  horizontalPadding,
   initialProgress,
   lineHeight,
   meta,
@@ -189,9 +212,14 @@ function buildVerticalReaderHtml({
   text,
   title,
   toolbar,
+  verticalColumnGap,
 }: Omit<
   VerticalReaderViewProps,
-  'onActivity' | 'onAuthorPress' | 'onBlockChange' | 'onProgress'
+  | 'onActivity'
+  | 'onAuthorPress'
+  | 'onBlockChange'
+  | 'onHighlight'
+  | 'onProgress'
 >): string {
   const renderedBlocks = blocks
     .map((block, index) => renderBlock(block, index, embeddedImages))
@@ -212,7 +240,7 @@ function buildVerticalReaderHtml({
   }
   body {
     color: ${escapeCssColor(text)};
-    font-family: serif;
+    font-family: ${fontFamily === 'serif' ? 'serif' : 'sans-serif'};
     -webkit-text-size-adjust: 100%;
     overscroll-behavior: none;
   }
@@ -231,7 +259,7 @@ function buildVerticalReaderHtml({
     direction: ltr;
     height: 100vh;
     min-width: 100vw;
-    padding: 28px 24px 30px;
+    padding: 28px ${Math.round(horizontalPadding)}px 30px;
     background: ${escapeCssColor(background)};
   }
   #header {
@@ -281,7 +309,7 @@ function buildVerticalReaderHtml({
   .block {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    margin-left: 1.3em;
+    margin-left: ${verticalColumnGap.toFixed(2)}em;
   }
   .chapter {
     font-family: sans-serif;
@@ -455,6 +483,35 @@ function buildVerticalReaderHtml({
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'author' }));
     });
   }
+  blocks.forEach(function (block) {
+    var holdTimer = 0;
+    var cancelHold = function () {
+      if (holdTimer) clearTimeout(holdTimer);
+      holdTimer = 0;
+    };
+    block.addEventListener('pointerdown', function () {
+      cancelHold();
+      holdTimer = setTimeout(function () {
+        holdTimer = 0;
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'highlight',
+          blockIndex: Number(block.getAttribute('data-block-index'))
+        }));
+      }, 620);
+    }, { passive: true });
+    block.addEventListener('pointerup', cancelHold, { passive: true });
+    block.addEventListener('pointercancel', cancelHold, { passive: true });
+    block.addEventListener('pointermove', cancelHold, { passive: true });
+    block.addEventListener('contextmenu', function (event) {
+      event.preventDefault();
+      cancelHold();
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'highlight',
+        blockIndex: Number(block.getAttribute('data-block-index'))
+      }));
+    });
+  });
+
   viewport.addEventListener('pointerdown', function () {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'activity' }));
   }, { passive: true });
