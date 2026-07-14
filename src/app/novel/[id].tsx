@@ -303,8 +303,13 @@ export default function NovelReaderScreen() {
   const [relatedError, setRelatedError] = useState<string | null>(null);
   const [relatedAttempt, setRelatedAttempt] = useState(1);
   const [discoveryNovels, setDiscoveryNovels] = useState<PixivNovelItem[]>([]);
+  const [discoveryNextUrl, setDiscoveryNextUrl] = useState<string | null>(null);
   const [isDiscoveryLoading, setIsDiscoveryLoading] = useState(isValidNovelId);
+  const [isDiscoveryLoadingMore, setIsDiscoveryLoadingMore] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveryLoadMoreError, setDiscoveryLoadMoreError] = useState<
+    string | null
+  >(null);
   const [discoveryAttempt, setDiscoveryAttempt] = useState(1);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [settings, setSettings] = useState<ReaderSettings>({
@@ -324,6 +329,8 @@ export default function NovelReaderScreen() {
     !isNavigatorVisible &&
     !isSeriesVisible;
   const fallbackStartedRef = useRef(false);
+  const discoveryRequestVersionRef = useRef(0);
+  const discoveryLoadingMoreRef = useRef(false);
   const readerEndOffsetRef = useRef<number | null>(null);
   const novelBodyOffsetRef = useRef(0);
   const blockOffsetsRef = useRef<Record<number, number>>({});
@@ -397,14 +404,12 @@ export default function NovelReaderScreen() {
   );
   const discoveryItems = useMemo(() => {
     const relatedIds = new Set(relatedItems.map((novel) => novel.id));
-    return discoveryNovels
-      .filter(
-        (novel) =>
-          novel.id !== novelId &&
-          !relatedIds.has(novel.id) &&
-          !excludedNovelIds.has(novel.id),
-      )
-      .slice(0, 12);
+    return discoveryNovels.filter(
+      (novel) =>
+        novel.id !== novelId &&
+        !relatedIds.has(novel.id) &&
+        !excludedNovelIds.has(novel.id),
+    );
   }, [discoveryNovels, excludedNovelIds, novelId, relatedItems]);
   const fontSize = FONT_SIZE_VALUES[settings.fontSize];
   const lineHeight = Math.round(
@@ -774,6 +779,9 @@ export default function NovelReaderScreen() {
 
   useEffect(() => {
     let isMounted = true;
+    const requestVersion = discoveryRequestVersionRef.current + 1;
+    discoveryRequestVersionRef.current = requestVersion;
+    discoveryLoadingMoreRef.current = false;
 
     if (!isValidNovelId || !isOfflineChecked) {
       return () => {
@@ -785,7 +793,10 @@ export default function NovelReaderScreen() {
       try {
         const result = await fetchRecommendedNovels();
 
-        if (!isMounted) {
+        if (
+          !isMounted ||
+          discoveryRequestVersionRef.current !== requestVersion
+        ) {
           return;
         }
 
@@ -794,16 +805,26 @@ export default function NovelReaderScreen() {
           result.refreshToken,
         ).catch(() => {});
 
-        if (isMounted) {
+        if (
+          isMounted &&
+          discoveryRequestVersionRef.current === requestVersion
+        ) {
           setDiscoveryNovels(result.novels);
+          setDiscoveryNextUrl(result.nextUrl);
           setDiscoveryError(null);
         }
       } catch (error) {
-        if (isMounted) {
+        if (
+          isMounted &&
+          discoveryRequestVersionRef.current === requestVersion
+        ) {
           setDiscoveryError(toErrorMessage(error));
         }
       } finally {
-        if (isMounted) {
+        if (
+          isMounted &&
+          discoveryRequestVersionRef.current === requestVersion
+        ) {
           setIsDiscoveryLoading(false);
         }
       }
@@ -815,6 +836,52 @@ export default function NovelReaderScreen() {
       isMounted = false;
     };
   }, [discoveryAttempt, isOfflineChecked, isValidNovelId, novelId]);
+
+  const loadMoreDiscovery = useCallback(async () => {
+    const nextUrl = discoveryNextUrl;
+
+    if (!nextUrl || discoveryLoadingMoreRef.current) {
+      return;
+    }
+
+    const requestVersion = discoveryRequestVersionRef.current;
+    discoveryLoadingMoreRef.current = true;
+    setIsDiscoveryLoadingMore(true);
+    setDiscoveryLoadMoreError(null);
+
+    try {
+      const result = await fetchRecommendedNovels(nextUrl);
+
+      if (discoveryRequestVersionRef.current !== requestVersion) {
+        return;
+      }
+
+      await SecureStore.setItemAsync(
+        REFRESH_TOKEN_KEY,
+        result.refreshToken,
+      ).catch(() => {});
+
+      if (discoveryRequestVersionRef.current !== requestVersion) {
+        return;
+      }
+
+      setDiscoveryNovels((current) =>
+        mergeNovelItems(current, result.novels),
+      );
+      setDiscoveryNextUrl(
+        result.nextUrl === nextUrl ? null : result.nextUrl,
+      );
+    } catch (error) {
+      if (discoveryRequestVersionRef.current === requestVersion) {
+        setDiscoveryLoadMoreError(toErrorMessage(error));
+      }
+    } finally {
+      if (discoveryRequestVersionRef.current === requestVersion) {
+        discoveryLoadingMoreRef.current = false;
+        setIsDiscoveryLoadingMore(false);
+      }
+    }
+  }, [discoveryNextUrl]);
 
   const handleAjaxSuccess = useCallback((content: NovelReaderContent) => {
     setReaderContent(content);
@@ -1560,7 +1627,10 @@ export default function NovelReaderScreen() {
             emptyText="該当する作品はありません"
             error={discoveryError}
             eyebrow="DISCOVERY"
+            hasMore={Boolean(discoveryNextUrl)}
             isLoading={isDiscoveryLoading}
+            isLoadingMore={isDiscoveryLoadingMore}
+            loadMoreError={discoveryLoadMoreError}
             loadingText="ディスカバリーを読み込み中…"
             currentNovel={detail}
             novels={discoveryItems}
@@ -1572,6 +1642,9 @@ export default function NovelReaderScreen() {
             }}
             onNovelPress={(discoveryNovel) => {
               pushReaderNovel(discoveryNovel);
+            }}
+            onLoadMore={() => {
+              void loadMoreDiscovery();
             }}
             onRetry={() => {
               setIsDiscoveryLoading(true);
@@ -1957,16 +2030,33 @@ function SeriesNavigationSection({
   );
 }
 
+function mergeNovelItems(
+  current: PixivNovelItem[],
+  incoming: PixivNovelItem[],
+): PixivNovelItem[] {
+  const merged = new Map<number, PixivNovelItem>();
+
+  for (const novel of [...current, ...incoming]) {
+    merged.set(novel.id, novel);
+  }
+
+  return [...merged.values()];
+}
+
 interface RecommendationSectionProps {
   currentNovel: PixivNovelItem | null;
   emptyText: string;
   error: string | null;
   eyebrow: string;
+  hasMore?: boolean;
   isLoading: boolean;
+  isLoadingMore?: boolean;
+  loadMoreError?: string | null;
   loadingText: string;
   novels: PixivNovelItem[];
   onAuthorPress: (userId: number) => void;
   onExclude: (novel: PixivNovelItem) => void;
+  onLoadMore?: () => void;
   onNovelPress: (novel: PixivNovelItem) => void;
   onRetry: () => void;
   palette: ReaderPalette;
@@ -1980,11 +2070,15 @@ function RecommendationSection({
   emptyText,
   error,
   eyebrow,
+  hasMore = false,
   isLoading,
+  isLoadingMore = false,
+  loadMoreError = null,
   loadingText,
   novels,
   onAuthorPress,
   onExclude,
+  onLoadMore,
   onNovelPress,
   onRetry,
   palette,
@@ -2113,6 +2207,48 @@ function RecommendationSection({
               </View>
             </Pressable>
           ))}
+          {onLoadMore && (hasMore || isLoadingMore || loadMoreError) ? (
+            <Pressable
+              accessibilityLabel={
+                loadMoreError
+                  ? 'ディスカバリーの続きを再読み込み'
+                  : 'ディスカバリーをさらに読み込む'
+              }
+              accessibilityRole="button"
+              accessibilityState={{
+                busy: isLoadingMore,
+                disabled: isLoadingMore,
+              }}
+              disabled={isLoadingMore}
+              onPress={onLoadMore}
+              style={({ pressed }) => [
+                styles.relatedLoadMoreCard,
+                pressed && !isLoadingMore && styles.relatedCardPressed,
+              ]}
+            >
+              {isLoadingMore ? (
+                <>
+                  <ActivityIndicator color={palette.accent} />
+                  <Text style={styles.relatedLoadMoreText}>読み込み中…</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.relatedLoadMoreIcon}>＋</Text>
+                  <Text style={styles.relatedLoadMoreText}>
+                    {loadMoreError ? 'もう一度試す' : 'さらに見る'}
+                  </Text>
+                  {loadMoreError ? (
+                    <Text
+                      numberOfLines={3}
+                      style={styles.relatedLoadMoreError}
+                    >
+                      {loadMoreError}
+                    </Text>
+                  ) : null}
+                </>
+              )}
+            </Pressable>
+          ) : null}
         </ScrollView>
       )}
     </View>
@@ -3107,6 +3243,36 @@ function createStyles(palette: ReaderPalette) {
     relatedCardPressed: {
       opacity: 0.72,
       transform: [{ scale: 0.985 }],
+    },
+    relatedLoadMoreCard: {
+      width: 150,
+      minHeight: 269,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 10,
+      paddingHorizontal: 16,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.border,
+      borderRadius: 16,
+      backgroundColor: palette.toolbar,
+    },
+    relatedLoadMoreIcon: {
+      color: palette.accent,
+      fontSize: 28,
+      fontWeight: '500',
+      lineHeight: 32,
+    },
+    relatedLoadMoreText: {
+      color: palette.accent,
+      fontSize: 12,
+      fontWeight: '800',
+      textAlign: 'center',
+    },
+    relatedLoadMoreError: {
+      color: palette.muted,
+      fontSize: 10,
+      lineHeight: 16,
+      textAlign: 'center',
     },
     relatedCover: {
       width: '100%',
