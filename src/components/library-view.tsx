@@ -530,6 +530,7 @@ export function LibraryView({
         contentContainerStyle={styles.modeTabs}
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.modeTabsScroll}
       >
         <LibraryModeButton
           active={mode === 'history'}
@@ -645,25 +646,6 @@ export function LibraryView({
               <Text style={styles.batchDangerText}>{isBatchBusy ? '処理中…' : '削除'}</Text>
             </Pressable>
           </View>
-        </View>
-      ) : null}
-
-      {mode === 'offline' && !isSelectionMode ? (
-        <OfflineDownloadManager
-          onChanged={() => void loadItems()}
-          visible={mode === 'offline'}
-        />
-      ) : null}
-
-      {mode === 'offline' && !isSelectionMode ? (
-        <View style={styles.offlineSummary}>
-          <View>
-            <Text style={styles.offlineSummaryTitle}>オフライン保存</Text>
-            <Text style={styles.offlineSummaryText}>
-              {items.length}作品 ・ 挿絵{offlineAssetFiles}ファイル
-            </Text>
-          </View>
-          <Text style={styles.offlineSummarySize}>{formatBytes(offlineAssetBytes)}</Text>
         </View>
       ) : null}
 
@@ -846,6 +828,24 @@ export function LibraryView({
                 query={historyQuery}
                 sort={historySort}
               />
+            ) : mode === 'offline' && !isSelectionMode ? (
+              <View style={styles.offlineHeader}>
+                <OfflineDownloadManager
+                  onChanged={() => void loadItems()}
+                  visible={mode === 'offline'}
+                />
+                <View style={styles.offlineSummary}>
+                  <View>
+                    <Text style={styles.offlineSummaryTitle}>オフライン保存</Text>
+                    <Text style={styles.offlineSummaryText}>
+                      {items.length}作品 ・ 挿絵{offlineAssetFiles}ファイル
+                    </Text>
+                  </View>
+                  <Text style={styles.offlineSummarySize}>
+                    {formatBytes(offlineAssetBytes)}
+                  </Text>
+                </View>
+              </View>
             ) : null
           }
           ListEmptyComponent={
@@ -1657,12 +1657,17 @@ function toErrorMessage(error: unknown): string {
 
 function createStyles(colors: AppColors) {
   return StyleSheet.create({
-    container: { flex: 1 },
+    container: { flex: 1, minHeight: 0 },
+    modeTabsScroll: {
+      flexGrow: 0,
+      flexShrink: 0,
+      height: 76,
+    },
     modeTabs: {
+      alignItems: 'center',
       gap: 9,
       paddingHorizontal: 16,
-      paddingTop: 16,
-      paddingBottom: 16,
+      paddingVertical: 16,
     },
     modeButton: {
       minWidth: 76,
@@ -1776,6 +1781,10 @@ function createStyles(colors: AppColors) {
       backgroundColor: colors.danger,
     },
     batchDangerText: { color: colors.onAccent, fontSize: 10, fontWeight: '900' },
+    offlineHeader: {
+      gap: 12,
+      paddingTop: 2,
+    },
     offlineSummary: {
       minHeight: 62,
       flexDirection: 'row',
