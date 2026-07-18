@@ -28,11 +28,11 @@ export interface AppUpdateInfo {
 }
 
 export const CURRENT_RELEASE_HIGHLIGHTS = [
-  'フォロー新着・作者フォロー・作者内検索',
-  '高度検索、作者／タグミュート、ミュート解除管理',
-  '読書目標、連続読書記録',
-  '永続オフライン保存キューと自動バックアップ',
-  '表示設定スライダー、没入表示、明るさ調整',
+  'ハイライト・引用機能を完全に削除',
+  '本文タップによるツールバー開閉を削除',
+  'ツールバーを常時表示して誤操作を防止',
+  '縦書き・スクロール・文字選択・しおりは維持',
+  'Android APKビルドの依存関係を修正',
 ] as const;
 
 export function getCurrentAppVersion(): string {
