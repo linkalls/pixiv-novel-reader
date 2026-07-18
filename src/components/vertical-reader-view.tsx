@@ -25,8 +25,6 @@ interface VerticalReaderViewProps {
   paragraphSpacing: number;
   onActivity: () => void;
   onAuthorPress: () => void;
-  onHighlight: (blockIndex: number) => void;
-  onTap: () => void;
   onBlockChange: (blockIndex: number) => void;
   onProgress: (progress: number, scrollOffset: number) => void;
   seriesTitle: string | null;
@@ -64,8 +62,6 @@ export const VerticalReaderView = forwardRef<
     onActivity,
     onAuthorPress,
     onBlockChange,
-    onHighlight,
-    onTap,
     onProgress,
     seriesTitle,
     text,
@@ -158,16 +154,6 @@ export const VerticalReaderView = forwardRef<
       onAuthorPress();
     }
 
-    if (
-      message.type === 'highlight' &&
-      typeof message.blockIndex === 'number'
-    ) {
-      onHighlight(Math.max(0, Math.floor(message.blockIndex)));
-    }
-
-    if (message.type === 'tap') {
-      onTap();
-    }
 
     if (
       message.type === 'progress' &&
@@ -234,8 +220,6 @@ function buildVerticalReaderHtml({
   | 'onActivity'
   | 'onAuthorPress'
   | 'onBlockChange'
-  | 'onHighlight'
-  | 'onTap'
   | 'onProgress'
 >): string {
   const renderedBlocks = blocks
@@ -501,54 +485,6 @@ function buildVerticalReaderHtml({
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'author' }));
     });
   }
-  blocks.forEach(function (block) {
-    var holdTimer = 0;
-    var startX = 0;
-    var startY = 0;
-    var didHold = false;
-    var moved = false;
-    var cancelHold = function () {
-      if (holdTimer) clearTimeout(holdTimer);
-      holdTimer = 0;
-    };
-    block.addEventListener('pointerdown', function (event) {
-      cancelHold();
-      startX = event.clientX;
-      startY = event.clientY;
-      didHold = false;
-      moved = false;
-      holdTimer = setTimeout(function () {
-        holdTimer = 0;
-        didHold = true;
-        window.ReactNativeWebView.postMessage(JSON.stringify({
-          type: 'highlight',
-          blockIndex: Number(block.getAttribute('data-block-index'))
-        }));
-      }, 620);
-    }, { passive: true });
-    block.addEventListener('pointermove', function (event) {
-      if (Math.hypot(event.clientX - startX, event.clientY - startY) > 9) {
-        moved = true;
-        cancelHold();
-      }
-    }, { passive: true });
-    block.addEventListener('pointerup', function () {
-      cancelHold();
-      if (!didHold && !moved) {
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'tap' }));
-      }
-    }, { passive: true });
-    block.addEventListener('pointercancel', cancelHold, { passive: true });
-    block.addEventListener('contextmenu', function (event) {
-      event.preventDefault();
-      cancelHold();
-      didHold = true;
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'highlight',
-        blockIndex: Number(block.getAttribute('data-block-index'))
-      }));
-    });
-  });
 
   viewport.addEventListener('pointerdown', function () {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'activity' }));

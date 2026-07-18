@@ -538,7 +538,7 @@ export function ReadingInsightsView({
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>バックアップと復元</Text>
         <Text style={styles.sectionDescription}>
-          読書履歴、本棚、しおり、ハイライト、ミュート、オフライン本文、統計、検索条件、表示設定をJSONファイルへ保存します。Pixivの認証情報は含みません。
+          読書履歴、本棚、しおり、ミュート、オフライン本文、統計、検索条件、表示設定をJSONファイルへ保存します。Pixivの認証情報は含みません。
         </Text>
         <View style={styles.autoBackupCard}>
           <Pressable
@@ -793,7 +793,6 @@ function formatBackupPreview(preview: BackupPreviewSelection): string {
     `読書履歴 ${preview.counts.history}件`,
     `本棚 ${preview.counts.shelves}件`,
     `しおり ${preview.counts.marks}件`,
-    `ハイライト ${preview.counts.highlights}件`,
     `オフライン作品 ${preview.counts.offline}件`,
     `読書セッション ${preview.counts.sessions}件`,
     '',

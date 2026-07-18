@@ -24,7 +24,6 @@ import { ensureOfflineDownloadQueueStorage } from './offline-download-queue';
 import { ensureOfflineSeriesSubscriptionStorage } from './offline-series-subscriptions';
 import { getLibraryDatabase } from './library-db';
 import { ensureOrganizerStorage } from './organizer-db';
-import { ensureReaderHighlightsStorage } from './reader-highlights-db';
 import { ensureReadingStatsStorage } from './reading-stats-db';
 import { ensureSearchHistoryStorage } from './search-history-db';
 
@@ -47,7 +46,6 @@ const BACKUP_TABLES = [
   'search_history',
   'content_mutes',
   'local_preferences',
-  'reader_highlights',
   'reading_goals',
   'offline_download_queue',
   'offline_download_settings',
@@ -60,7 +58,6 @@ const OPTIONAL_BACKUP_TABLES = new Set<BackupTableName>([
   'search_history',
   'content_mutes',
   'local_preferences',
-  'reader_highlights',
   'reading_goals',
   'offline_download_queue',
   'offline_download_settings',
@@ -85,7 +82,6 @@ export interface BackupPreviewSelection {
     history: number;
     shelves: number;
     marks: number;
-    highlights: number;
     offline: number;
     sessions: number;
   };
@@ -225,7 +221,6 @@ export function createBackupPreview(
       history: payload.tables.reading_history?.length ?? 0,
       shelves: payload.tables.bookshelves?.length ?? 0,
       marks: payload.tables.reader_marks?.length ?? 0,
-      highlights: payload.tables.reader_highlights?.length ?? 0,
       offline: payload.tables.offline_novels?.length ?? 0,
       sessions: payload.tables.reading_sessions?.length ?? 0,
     },
@@ -263,7 +258,6 @@ export async function restoreAppBackup(
     ensureReadingStatsStorage(),
     ensureSearchHistoryStorage(),
     ensureContentPreferencesStorage(),
-    ensureReaderHighlightsStorage(),
     ensureOfflineDownloadQueueStorage(),
     ensureOfflineSeriesSubscriptionStorage(),
   ]);
@@ -303,11 +297,6 @@ export async function restoreAppBackup(
       transaction,
       'local_preferences',
       payload.tables.local_preferences ?? [],
-    );
-    restoredRows += await restoreRows(
-      transaction,
-      'reader_highlights',
-      payload.tables.reader_highlights ?? [],
     );
     restoredRows += await restoreRows(
       transaction,
@@ -361,7 +350,6 @@ async function createBackupPayload(): Promise<AppBackupPayload> {
     ensureReadingStatsStorage(),
     ensureSearchHistoryStorage(),
     ensureContentPreferencesStorage(),
-    ensureReaderHighlightsStorage(),
     ensureOfflineDownloadQueueStorage(),
     ensureOfflineSeriesSubscriptionStorage(),
   ]);
@@ -589,18 +577,6 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'anchor_novel_id',
     'title',
     'known_novel_ids_json',
-    'created_at',
-    'updated_at',
-  ],
-  reader_highlights: [
-    'id',
-    'novel_id',
-    'title',
-    'author_name',
-    'block_index',
-    'excerpt',
-    'note',
-    'color',
     'created_at',
     'updated_at',
   ],

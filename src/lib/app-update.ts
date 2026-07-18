@@ -30,7 +30,7 @@ export interface AppUpdateInfo {
 export const CURRENT_RELEASE_HIGHLIGHTS = [
   'フォロー新着・作者フォロー・作者内検索',
   '高度検索、作者／タグミュート、ミュート解除管理',
-  'ハイライト・引用、読書目標、連続読書記録',
+  '読書目標、連続読書記録',
   '永続オフライン保存キューと自動バックアップ',
   '表示設定スライダー、没入表示、明るさ調整',
 ] as const;

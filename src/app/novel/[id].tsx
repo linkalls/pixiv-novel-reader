@@ -38,7 +38,6 @@ import Svg, { Path as SvgPath } from 'react-native-svg';
 import { BookshelfPickerModal } from '@/components/bookshelf-picker-modal';
 import { NovelSeriesModal } from '@/components/novel-series-modal';
 import { ReaderMarksModal } from '@/components/reader-marks-modal';
-import { ReaderHighlightsModal } from '@/components/reader-highlights-modal';
 import { ReaderSpeechModal } from '@/components/reader-speech-modal';
 import { RecommendationExclusionsModal } from '@/components/recommendation-exclusions-modal';
 import {
@@ -105,7 +104,6 @@ import {
   createReaderMarkExcerpt,
   findReaderBlockAtOffset,
 } from '@/lib/reader-marks';
-import type { ReaderHighlight } from '@/lib/reader-highlights-db';
 import { ReadingActivityClock } from '@/lib/reading-activity';
 import {
   finishReadingSession,
@@ -148,7 +146,6 @@ interface ReaderSettings {
   paragraphSpacing: number;
   brightness: number | null;
   hideStatusBar: boolean;
-  tapToToggleToolbar: boolean;
   autoOpenNextSeries: boolean;
   keepAwake: boolean;
   layout: ReaderLayout;
@@ -314,9 +311,7 @@ export default function NovelReaderScreen() {
   const [isMoreVisible, setIsMoreVisible] = useState(false);
   const [isBookshelfVisible, setIsBookshelfVisible] = useState(false);
   const [isMarksVisible, setIsMarksVisible] = useState(false);
-  const [isHighlightsVisible, setIsHighlightsVisible] = useState(false);
   const [isInteractionVisible, setIsInteractionVisible] = useState(false);
-  const [highlightBlockIndex, setHighlightBlockIndex] = useState<number | null>(null);
   const [isExclusionsVisible, setIsExclusionsVisible] = useState(false);
   const [excludedNovelIds, setExcludedNovelIds] = useState<Set<number>>(
     () => new Set(),
@@ -357,7 +352,6 @@ export default function NovelReaderScreen() {
   >(null);
   const [discoveryAttempt, setDiscoveryAttempt] = useState(1);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [isToolbarVisible, setIsToolbarVisible] = useState(true);
   const [settings, setSettings] = useState<ReaderSettings>({
     theme: isAppDark ? 'black' : 'white',
     fontSize: 18,
@@ -369,7 +363,6 @@ export default function NovelReaderScreen() {
     paragraphSpacing: 28,
     brightness: null,
     hideStatusBar: false,
-    tapToToggleToolbar: true,
     autoOpenNextSeries: false,
     keepAwake: true,
     layout: 'horizontal',
@@ -381,7 +374,6 @@ export default function NovelReaderScreen() {
     !isMoreVisible &&
     !isBookshelfVisible &&
     !isMarksVisible &&
-    !isHighlightsVisible &&
     !isInteractionVisible &&
     !isExclusionsVisible &&
     !isNavigatorVisible &&
@@ -408,7 +400,6 @@ export default function NovelReaderScreen() {
   const hasAutoDeletedOfflineRef = useRef(false);
   const hasAutoOpenedNextSeriesRef = useRef(false);
   const previousBrightnessRef = useRef<number | null>(null);
-  const readerTapStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const historyNovelIdRef = useRef<number | null>(null);
   const appStateRef = useRef(AppState.currentState);
   const isReaderFocusedRef = useRef(isReadingSurfaceVisible);
@@ -442,12 +433,6 @@ export default function NovelReaderScreen() {
   const currentMarkExcerpt = createReaderMarkExcerpt(
     blocks,
     currentMarkBlockIndex,
-  );
-  const currentHighlightBlockIndex =
-    highlightBlockIndex ?? currentMarkBlockIndex;
-  const currentHighlightExcerpt = createReaderHighlightExcerpt(
-    blocks,
-    currentHighlightBlockIndex,
   );
   const searchMatches = useMemo(
     () => searchReaderBlocks(blocks, searchQuery),
@@ -616,7 +601,6 @@ export default function NovelReaderScreen() {
               ? null
               : clampNumber(parsed.brightness, 0.08, 1, 0.5),
           hideStatusBar: parsed.hideStatusBar === true,
-          tapToToggleToolbar: parsed.tapToToggleToolbar !== false,
           autoOpenNextSeries: parsed.autoOpenNextSeries === true,
           keepAwake: parsed.keepAwake !== false,
           layout,
@@ -1562,31 +1546,10 @@ export default function NovelReaderScreen() {
     });
   }
 
-  function toggleReaderToolbar() {
-    if (!settings.tapToToggleToolbar) return;
-    setIsToolbarVisible((current) => !current);
-  }
-
-  function handleReaderTapStart(event: GestureResponderEvent) {
-    const { pageX, pageY } = event.nativeEvent;
-    readerTapStartRef.current = { x: pageX, y: pageY, at: Date.now() };
-    markReadingActivity();
-  }
-
-  function handleReaderTapEnd(event: GestureResponderEvent) {
-    const start = readerTapStartRef.current;
-    readerTapStartRef.current = null;
-    if (!start) return;
-    const { pageX, pageY } = event.nativeEvent;
-    const movement = Math.hypot(pageX - start.x, pageY - start.y);
-    if (movement <= 9 && Date.now() - start.at <= 420) {
-      toggleReaderToolbar();
-    }
-  }
 
   return (
     <SafeAreaView
-      edges={isToolbarVisible ? ['top', 'bottom'] : ['bottom']}
+      edges={['top', 'bottom']}
       onTouchStart={markReadingActivity}
       style={styles.safeArea}
     >
@@ -1606,8 +1569,6 @@ export default function NovelReaderScreen() {
         />
       )}
 
-      {isToolbarVisible ? (
-        <>
       <View style={styles.toolbar}>
           <View style={styles.toolbarSide}>
           <ToolbarSymbolButton
@@ -1663,8 +1624,6 @@ export default function NovelReaderScreen() {
           ]}
         />
       </View>
-        </>
-      ) : null}
 
       {isTextLoading ? (
         <View style={styles.centered}>
@@ -1699,11 +1658,6 @@ export default function NovelReaderScreen() {
                 openUserProfile(detail.user.id);
               }
             }}
-            onHighlight={(blockIndex) => {
-              setHighlightBlockIndex(blockIndex);
-              setIsHighlightsVisible(true);
-            }}
-            onTap={toggleReaderToolbar}
             onBlockChange={setVerticalBlockIndex}
             onProgress={(progress) => {
               setScrollProgress(progress);
@@ -1718,8 +1672,6 @@ export default function NovelReaderScreen() {
           />
         ) : (
           <ScrollView
-            onTouchEnd={handleReaderTapEnd}
-            onTouchStart={handleReaderTapStart}
           contentContainerStyle={[
             styles.readerContent,
             { paddingHorizontal: settings.horizontalPadding },
@@ -1792,10 +1744,6 @@ export default function NovelReaderScreen() {
                   fontSize={fontSize}
                   fontWeight={settings.fontWeight}
                   lineHeight={lineHeight}
-                  onLongPress={() => {
-                    setHighlightBlockIndex(index);
-                    setIsHighlightsVisible(true);
-                  }}
                   palette={palette}
                   styles={styles}
                 />
@@ -2030,28 +1978,6 @@ export default function NovelReaderScreen() {
         visible={isMarksVisible}
       />
 
-      <ReaderHighlightsModal
-        accent={palette.accent}
-        background={palette.toolbar}
-        border={palette.border}
-        currentBlockIndex={currentHighlightBlockIndex}
-        currentExcerpt={currentHighlightExcerpt}
-        detail={detail}
-        muted={palette.muted}
-        onClose={() => {
-          setIsHighlightsVisible(false);
-          setHighlightBlockIndex(null);
-        }}
-        onJump={(highlight: ReaderHighlight) => {
-          setIsHighlightsVisible(false);
-          setHighlightBlockIndex(null);
-          requestAnimationFrame(() => jumpToBlock(highlight.blockIndex));
-        }}
-        onStatus={showStatus}
-        overlay={palette.overlay}
-        text={palette.text}
-        visible={isHighlightsVisible}
-      />
 
       <ReaderSpeechModal
         accent={palette.accent}
@@ -2144,11 +2070,6 @@ export default function NovelReaderScreen() {
         onOpenMarks={() => {
           setIsMoreVisible(false);
           requestAnimationFrame(() => setIsMarksVisible(true));
-        }}
-        onOpenHighlights={() => {
-          setIsMoreVisible(false);
-          setHighlightBlockIndex(currentMarkBlockIndex);
-          requestAnimationFrame(() => setIsHighlightsVisible(true));
         }}
         onOpenExclusions={() => {
           setIsMoreVisible(false);
@@ -2689,7 +2610,6 @@ interface NovelBlockViewProps {
   fontSize: number;
   fontWeight: number;
   lineHeight: number;
-  onLongPress: () => void;
   palette: ReaderPalette;
   styles: ReturnType<typeof createStyles>;
 }
@@ -2701,7 +2621,6 @@ function NovelBlockView({
   fontSize,
   fontWeight,
   lineHeight,
-  onLongPress,
   palette,
   styles,
 }: NovelBlockViewProps) {
@@ -2709,7 +2628,6 @@ function NovelBlockView({
     case 'text':
       return (
         <Text
-          onLongPress={onLongPress}
           selectable
           style={[
             styles.bodyText,
@@ -2738,7 +2656,7 @@ function NovelBlockView({
       );
     case 'chapter':
       return (
-        <Text onLongPress={onLongPress} selectable style={styles.chapterTitle}>
+        <Text selectable style={styles.chapterTitle}>
           {block.title}
         </Text>
       );
@@ -3033,18 +2951,6 @@ function ReaderSettingsModal({
             styles={styles}
             value={settings.hideStatusBar}
           />
-          <SettingsToggleRow
-            label="本文タップでツールバーを開閉"
-            onPress={() => {
-              onChange({
-                ...settings,
-                tapToToggleToolbar: !settings.tapToToggleToolbar,
-              });
-            }}
-            palette={palette}
-            styles={styles}
-            value={settings.tapToToggleToolbar}
-          />
 
           <SettingsToggleRow
             label="シリーズ読了時に次の話を自動で開く"
@@ -3207,7 +3113,6 @@ interface MoreActionsModalProps {
   onOpenDetail: () => void;
   onOpenExclusions: () => void;
   onOpenMarks: () => void;
-  onOpenHighlights: () => void;
   onOpenInteractions: () => void;
   onOpenNavigator: () => void;
   onOpenPixiv: () => void;
@@ -3235,7 +3140,6 @@ function MoreActionsModal({
   onOpenDetail,
   onOpenExclusions,
   onOpenMarks,
-  onOpenHighlights,
   onOpenInteractions,
   onOpenNavigator,
   onOpenPixiv,
@@ -3311,12 +3215,6 @@ function MoreActionsModal({
             disabled={!canOrganize}
             label="しおり・メモ"
             onPress={onOpenMarks}
-            palette={palette}
-          />
-          <SheetAction
-            disabled={!canOrganize}
-            label="ハイライト・引用"
-            onPress={onOpenHighlights}
             palette={palette}
           />
           <SheetAction
@@ -3400,24 +3298,6 @@ function SheetAction({
   );
 }
 
-function createReaderHighlightExcerpt(
-  blocks: NovelBlock[],
-  blockIndex: number,
-): string {
-  const block = blocks[blockIndex];
-  if (!block) {
-    return '';
-  }
-
-  if (block.type === 'text') {
-    return block.text.trim().replace(/\s+/g, ' ').slice(0, 1000);
-  }
-  if (block.type === 'chapter') {
-    return block.title.trim().replace(/\s+/g, ' ').slice(0, 1000);
-  }
-
-  return createReaderMarkExcerpt(blocks, blockIndex);
-}
 
 function clampNumber(
   value: unknown,

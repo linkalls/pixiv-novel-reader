@@ -51,11 +51,6 @@ import {
   type ContentMute,
 } from '@/lib/content-preferences-db';
 import {
-  deleteReaderHighlight,
-  listReaderHighlights,
-  type ReaderHighlight,
-} from '@/lib/reader-highlights-db';
-import {
   enqueueOfflineDownloads,
   processOfflineDownloadQueue,
 } from '@/lib/offline-download-queue';
@@ -72,7 +67,6 @@ type LibraryMode =
   | 'history'
   | 'shelves'
   | 'marks'
-  | 'highlights'
   | 'offline'
   | 'mutes'
   | 'stats';
@@ -112,7 +106,6 @@ export function LibraryView({
   const [mode, setMode] = useState<LibraryMode>('history');
   const [items, setItems] = useState<LibraryNovel[]>([]);
   const [marks, setMarks] = useState<ReaderMark[]>([]);
-  const [highlights, setHighlights] = useState<ReaderHighlight[]>([]);
   const [contentMutes, setContentMutes] = useState<ContentMute[]>([]);
   const [shelves, setShelves] = useState<Bookshelf[]>([]);
   const [selectedShelfId, setSelectedShelfId] = useState<number | null>(null);
@@ -171,7 +164,6 @@ export function LibraryView({
           }),
         );
         setMarks([]);
-        setHighlights([]);
         setContentMutes([]);
         return;
       }
@@ -200,31 +192,21 @@ export function LibraryView({
         );
         setOfflineNovelSizes(Object.fromEntries(sizeEntries));
         setMarks([]);
-        setHighlights([]);
         setContentMutes([]);
         return;
       }
 
       if (mode === 'marks') {
         setMarks(await listReaderMarks());
-        setHighlights([]);
         setContentMutes([]);
         setItems([]);
         return;
       }
 
-      if (mode === 'highlights') {
-        setHighlights(await listReaderHighlights());
-        setMarks([]);
-        setContentMutes([]);
-        setItems([]);
-        return;
-      }
 
       if (mode === 'mutes') {
         setContentMutes(await listContentMutes());
         setMarks([]);
-        setHighlights([]);
         setItems([]);
         return;
       }
@@ -232,7 +214,6 @@ export function LibraryView({
       if (mode === 'stats') {
         setItems([]);
         setMarks([]);
-        setHighlights([]);
         setContentMutes([]);
         return;
       }
@@ -246,7 +227,6 @@ export function LibraryView({
       setShelves(nextShelves);
       setSelectedShelfId(nextSelectedShelfId);
       setMarks([]);
-      setHighlights([]);
       setContentMutes([]);
       setItems(
         nextSelectedShelfId
@@ -429,10 +409,6 @@ export function LibraryView({
     await loadItems();
   }
 
-  async function removeHighlight(highlightId: number) {
-    await deleteReaderHighlight(highlightId);
-    await loadItems();
-  }
 
   async function unmuteContent(mute: ContentMute) {
     await removeContentMute(mute.kind, mute.value);
@@ -546,11 +522,6 @@ export function LibraryView({
           active={mode === 'marks'}
           label="しおり"
           onPress={() => changeMode('marks')}
-        />
-        <LibraryModeButton
-          active={mode === 'highlights'}
-          label="引用"
-          onPress={() => changeMode('highlights')}
         />
         <LibraryModeButton
           active={mode === 'offline'}
@@ -715,42 +686,6 @@ export function LibraryView({
           onDataRestored={() => {
             void loadItems();
           }}
-        />
-      ) : mode === 'highlights' ? (
-        <FlatList
-          contentContainerStyle={styles.listContent}
-          data={highlights}
-          keyExtractor={(highlight) => `highlight-${highlight.id}`}
-          ListEmptyComponent={
-            <LibraryEmptyState
-              colors={colors}
-              isLoading={isLoading}
-              message={emptyMessage}
-              styles={styles}
-            />
-          }
-          refreshControl={
-            <RefreshControl
-              colors={[colors.accent]}
-              onRefresh={() => void loadItems()}
-              refreshing={isLoading && highlights.length > 0}
-              tintColor={colors.accent}
-            />
-          }
-          renderItem={({ item: highlight }) => (
-            <ReaderHighlightCard
-              highlight={highlight}
-              onDelete={() => void removeHighlight(highlight.id)}
-              onOpen={() =>
-                onOpenNovel(
-                  highlight.novelId,
-                  false,
-                  undefined,
-                  highlight.blockIndex,
-                )
-              }
-            />
-          )}
         />
       ) : mode === 'mutes' ? (
         <FlatList
@@ -1415,72 +1350,6 @@ function LibraryNovelCard({
   );
 }
 
-function ReaderHighlightCard({
-  highlight,
-  onDelete,
-  onOpen,
-}: {
-  highlight: ReaderHighlight;
-  onDelete: () => void;
-  onOpen: () => void;
-}) {
-  const { colors } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-  const color =
-    highlight.color === 'blue'
-      ? '#70B7FF'
-      : highlight.color === 'pink'
-        ? '#FF91B8'
-        : highlight.color === 'green'
-          ? '#72D69B'
-          : '#F5D547';
-
-  return (
-    <View style={styles.highlightCard}>
-      <View style={[styles.highlightBar, { backgroundColor: color }]} />
-      <Pressable
-        accessibilityRole="button"
-        onPress={onOpen}
-        style={({ pressed }) => [
-          styles.highlightMain,
-          pressed && styles.pressed,
-        ]}
-      >
-        <Text numberOfLines={1} style={styles.cardTitle}>
-          {highlight.title}
-        </Text>
-        <Text numberOfLines={1} style={styles.author}>
-          {highlight.authorName}
-        </Text>
-        <Text numberOfLines={5} style={styles.highlightExcerpt}>
-          「{highlight.excerpt}」
-        </Text>
-        {highlight.note ? (
-          <Text numberOfLines={3} style={styles.markNote}>
-            📝 {highlight.note}
-          </Text>
-        ) : null}
-        <View style={styles.highlightFooter}>
-          <Text style={styles.meta}>
-            {formatRelativeTime(highlight.updatedAt)}
-          </Text>
-          <Text style={styles.openLabel}>引用位置から読む　›</Text>
-        </View>
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        onPress={onDelete}
-        style={({ pressed }) => [
-          styles.removeButton,
-          pressed && styles.pressed,
-        ]}
-      >
-        <Text style={styles.removeButtonText}>ハイライトを削除</Text>
-      </Pressable>
-    </View>
-  );
-}
-
 function ContentMuteCard({
   mute,
   onRestore,
@@ -1607,13 +1476,6 @@ function getEmptyMessage(
       icon: '🔖',
       title: 'しおり・メモはありません',
       description: '読書画面の「…」から現在位置を保存できます。',
-    };
-  }
-  if (mode === 'highlights') {
-    return {
-      icon: '✍',
-      title: '保存した引用はありません',
-      description: '本文を長押しすると、色とメモ付きで保存できます。',
     };
   }
   if (mode === 'mutes') {
@@ -1960,26 +1822,6 @@ function createStyles(colors: AppColors) {
     },
     removeButton: { minHeight: 42, alignItems: 'center', justifyContent: 'center', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
     removeButtonText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
-    highlightCard: {
-      overflow: 'hidden',
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
-      borderRadius: 18,
-      backgroundColor: colors.surface,
-    },
-    highlightBar: { height: 5 },
-    highlightMain: { gap: 7, padding: 15 },
-    highlightExcerpt: {
-      color: colors.text,
-      fontSize: 13,
-      lineHeight: 21,
-    },
-    highlightFooter: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      gap: 10,
-    },
     muteCard: {
       minHeight: 78,
       flexDirection: 'row',
