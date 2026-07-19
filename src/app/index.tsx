@@ -1226,6 +1226,8 @@ export default function HomeScreen() {
         ListEmptyComponent={
           <EmptyFeed
             error={activeFeed.error}
+            hasLoaded={activeFeed.hasLoaded}
+            hasSearchQuery={Boolean(submittedSearchWord)}
             isLoading={activeFeed.isLoading}
             onRetry={() => {
               if (activeTab === 'search' && !submittedSearchWord) {
@@ -1950,11 +1952,15 @@ function FilterChip({
 
 function EmptyFeed({
   error,
+  hasLoaded,
+  hasSearchQuery,
   isLoading,
   onRetry,
   tab,
 }: {
   error: string | null;
+  hasLoaded: boolean;
+  hasSearchQuery: boolean;
   isLoading: boolean;
   onRetry: () => void;
   tab: AppTab;
@@ -1962,7 +1968,7 @@ function EmptyFeed({
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  if (isLoading) {
+  if (isLoading || (tab === 'search' && hasSearchQuery && !hasLoaded)) {
     return (
       <View style={styles.emptyState}>
         <ActivityIndicator color={colors.accent} size="large" />

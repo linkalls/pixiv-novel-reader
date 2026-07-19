@@ -98,8 +98,8 @@ async function getOrganizerDatabase(): Promise<SQLiteDatabase> {
   const database = await getLibraryDatabase();
 
   if (!schemaPromise) {
-    schemaPromise = database
-      .execAsync(`
+    schemaPromise = (async () => {
+      await database.execAsync(`
         CREATE TABLE IF NOT EXISTS bookshelves (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -138,7 +138,11 @@ async function getOrganizerDatabase(): Promise<SQLiteDatabase> {
           author_name TEXT NOT NULL,
           hidden_at INTEGER NOT NULL
         );
+      `);
 
+      await ensureSortOrderColumns(database);
+
+      await database.execAsync(`
         CREATE INDEX IF NOT EXISTS bookshelf_items_added_at_idx
           ON bookshelf_items(shelf_id, added_at DESC);
         CREATE INDEX IF NOT EXISTS bookshelf_items_order_idx
@@ -156,25 +160,31 @@ async function getOrganizerDatabase(): Promise<SQLiteDatabase> {
           VALUES ('お気に入り', CAST(strftime('%s','now') AS INTEGER) * 1000, 1);
         INSERT OR IGNORE INTO bookshelves (name, created_at, sort_order)
           VALUES ('読み返したい', CAST(strftime('%s','now') AS INTEGER) * 1000, 2);
-      `)
-      .catch((error) => {
-        schemaPromise = null;
-        throw error;
-      });
+      `);
+    })().catch((error) => {
+      schemaPromise = null;
+      throw error;
+    });
   }
 
   await schemaPromise;
-  await ensureBookshelfItemSortOrderColumn(database);
   return database;
 }
 
-async function ensureBookshelfItemSortOrderColumn(
-  database: SQLiteDatabase,
-): Promise<void> {
-  const columns = await database.getAllAsync<{ name: string }>(
+async function ensureSortOrderColumns(database: SQLiteDatabase): Promise<void> {
+  const bookshelfColumns = await database.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(bookshelves)',
+  );
+  if (!bookshelfColumns.some((column) => column.name === 'sort_order')) {
+    await database.execAsync(
+      'ALTER TABLE bookshelves ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0',
+    );
+  }
+
+  const itemColumns = await database.getAllAsync<{ name: string }>(
     'PRAGMA table_info(bookshelf_items)',
   );
-  if (!columns.some((column) => column.name === 'sort_order')) {
+  if (!itemColumns.some((column) => column.name === 'sort_order')) {
     await database.execAsync(
       'ALTER TABLE bookshelf_items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0',
     );

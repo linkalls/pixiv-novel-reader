@@ -28,11 +28,9 @@ export interface AppUpdateInfo {
 }
 
 export const CURRENT_RELEASE_HIGHLIGHTS = [
-  'ハイライト・引用機能を完全に削除',
-  '本文タップによるツールバー開閉を削除',
-  'ツールバーを常時表示して誤操作を防止',
-  '縦書き・スクロール・文字選択・しおりは維持',
-  'Android APKビルドの依存関係を修正',
+  '既存データベースの本棚移行エラーを修正',
+  'ライブラリを開けない問題を解消',
+  '検索中の空画面表示のちらつきを修正',
 ] as const;
 
 export function getCurrentAppVersion(): string {
