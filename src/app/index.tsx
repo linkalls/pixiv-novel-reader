@@ -101,6 +101,7 @@ type AppTab =
   | 'library';
 
 interface SubmittedSearch {
+  filters: AdvancedSearchFilters;
   sort: NovelSearchSort;
   target: NovelSearchTarget;
   word: string;
@@ -226,10 +227,18 @@ export default function HomeScreen() {
     minCharacters: null,
     maxCharacters: null,
     minBookmarks: null,
-    includeR18: true,
-    includeAi: true,
+    maxBookmarks: null,
+    minViews: null,
+    maxViews: null,
+    minComments: null,
     dateRange: 'all',
     seriesMode: 'all',
+    originalMode: 'all',
+    bookmarkState: 'all',
+    ageRating: 'all',
+    aiMode: 'all',
+    requiredTags: [],
+    excludedTags: [],
     hideFinished: false,
   });
   const [isAdvancedSearchVisible, setIsAdvancedSearchVisible] = useState(false);
@@ -280,6 +289,7 @@ export default function HomeScreen() {
         searchWord?: string;
         searchSort?: NovelSearchSort;
         searchTarget?: NovelSearchTarget;
+        searchFilters?: AdvancedSearchFilters;
       },
     ) => {
       if (tab === 'library') {
@@ -292,6 +302,10 @@ export default function HomeScreen() {
       const searchRequest: SubmittedSearch | null =
         tab === 'search'
           ? {
+              filters:
+                options?.searchFilters ??
+                submittedSearchRef.current?.filters ??
+                searchFiltersRef.current,
               word:
                 options?.searchWord ??
                 submittedSearchRef.current?.word ??
@@ -314,7 +328,7 @@ export default function HomeScreen() {
       const requestKey = append
         ? `${tab}:page:${nextUrl}`
         : tab === 'search' && searchRequest
-          ? `${tab}:first:${searchRequest.word}:${searchRequest.sort}:${searchRequest.target}`
+          ? `${tab}:first:${searchRequest.word}:${searchRequest.sort}:${searchRequest.target}:${serializeSearchFilters(searchRequest.filters)}`
           : `${tab}:first`;
 
       if (inFlightPagesRef.current.has(requestKey)) {
@@ -446,9 +460,44 @@ export default function HomeScreen() {
           );
           filteredPageNovels = applyAdvancedSearchFilters(
             filteredPageNovels,
-            searchFiltersRef.current,
+            searchRequest?.filters ?? searchFiltersRef.current,
             finishedNovelIds,
           );
+        }
+
+        if (tab === 'search' && !append && searchRequest) {
+          let additionalPages = 0;
+          while (
+            filteredPageNovels.length < 10 &&
+            result.nextUrl &&
+            additionalPages < 4
+          ) {
+            if (feedRequestVersionRef.current.search !== requestVersion) return;
+            const additionalResult = await searchNovels(
+              searchRequest.word,
+              searchRequest.sort,
+              searchRequest.target,
+              result.nextUrl,
+            );
+            await persistRefreshToken(additionalResult.refreshToken);
+            let additionalNovels = await filterMutedNovels(additionalResult.novels);
+            const additionalStatuses = await getNovelReadingStatuses(
+              additionalNovels.map((novel) => novel.id),
+            );
+            const finishedNovelIds = new Set(
+              [...additionalStatuses.entries()]
+                .filter(([, status]) => status.isFinished)
+                .map(([novelId]) => novelId),
+            );
+            additionalNovels = applyAdvancedSearchFilters(
+              additionalNovels,
+              searchRequest.filters,
+              finishedNovelIds,
+            );
+            filteredPageNovels = mergeNovels(filteredPageNovels, additionalNovels);
+            result = { ...additionalResult, novels: result.novels };
+            additionalPages += 1;
+          }
         }
 
         const nextNovels = append
@@ -512,6 +561,7 @@ export default function HomeScreen() {
         searchWord: tagName,
         searchSort,
         searchTarget: 'exact_match_for_tags',
+        searchFilters: searchFiltersRef.current,
       });
     },
     [requestFeed, searchSort],
@@ -822,6 +872,7 @@ export default function HomeScreen() {
       searchWord: word,
       searchSort: sort,
       searchTarget: target,
+      searchFilters: searchFiltersRef.current,
     });
   }
 
@@ -835,6 +886,7 @@ export default function HomeScreen() {
       searchWord: item.word,
       searchSort: item.sort,
       searchTarget: item.target,
+      searchFilters: searchFiltersRef.current,
     });
   }
 
@@ -1015,6 +1067,7 @@ export default function HomeScreen() {
       searchWord: submittedSearchWord,
       searchSort,
       searchTarget,
+      searchFilters: searchFiltersRef.current,
     });
   }, [
     activeTab,
@@ -1447,6 +1500,7 @@ export default function HomeScreen() {
               searchWord: searchWord.trim(),
               searchSort,
               searchTarget,
+              searchFilters: filters,
             });
           }
         }}
@@ -2132,12 +2186,24 @@ function countActiveSearchFilters(filters: AdvancedSearchFilters): number {
     filters.minCharacters !== null,
     filters.maxCharacters !== null,
     filters.minBookmarks !== null,
-    !filters.includeR18,
-    !filters.includeAi,
+    filters.maxBookmarks !== null,
+    filters.minViews !== null,
+    filters.maxViews !== null,
+    filters.minComments !== null,
     filters.dateRange !== 'all',
     filters.seriesMode !== 'all',
+    filters.originalMode !== 'all',
+    filters.bookmarkState !== 'all',
+    filters.ageRating !== 'all',
+    filters.aiMode !== 'all',
+    filters.requiredTags.length > 0,
+    filters.excludedTags.length > 0,
     filters.hideFinished,
   ].filter(Boolean).length;
+}
+
+function serializeSearchFilters(filters: AdvancedSearchFilters): string {
+  return JSON.stringify(filters);
 }
 
 function mergeNovels(

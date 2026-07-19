@@ -15,10 +15,18 @@ export interface AdvancedSearchFilters {
   minCharacters: number | null;
   maxCharacters: number | null;
   minBookmarks: number | null;
-  includeR18: boolean;
-  includeAi: boolean;
-  dateRange: 'all' | 'week' | 'month' | 'year';
+  maxBookmarks: number | null;
+  minViews: number | null;
+  maxViews: number | null;
+  minComments: number | null;
+  dateRange: 'all' | 'day' | 'three_days' | 'week' | 'month' | 'three_months' | 'year';
   seriesMode: 'all' | 'series' | 'standalone';
+  originalMode: 'all' | 'original' | 'fanwork';
+  bookmarkState: 'all' | 'bookmarked' | 'not_bookmarked';
+  ageRating: 'all' | 'general' | 'r18' | 'r18g';
+  aiMode: 'all' | 'exclude' | 'partial' | 'full';
+  requiredTags: string[];
+  excludedTags: string[];
   hideFinished: boolean;
 }
 
@@ -26,10 +34,18 @@ const DEFAULT_SEARCH_FILTERS: AdvancedSearchFilters = {
   minCharacters: null,
   maxCharacters: null,
   minBookmarks: null,
-  includeR18: true,
-  includeAi: true,
+  maxBookmarks: null,
+  minViews: null,
+  maxViews: null,
+  minComments: null,
   dateRange: 'all',
   seriesMode: 'all',
+  originalMode: 'all',
+  bookmarkState: 'all',
+  ageRating: 'all',
+  aiMode: 'all',
+  requiredTags: [],
+  excludedTags: [],
   hideFinished: false,
 };
 
@@ -193,55 +209,58 @@ export function applyAdvancedSearchFilters(
   filters: AdvancedSearchFilters,
   finishedNovelIds: ReadonlySet<number> = new Set<number>(),
 ): PixivNovelItem[] {
+  const requiredTags = filters.requiredTags.map(normalizeTagKey).filter(Boolean);
+  const excludedTags = filters.excludedTags.map(normalizeTagKey).filter(Boolean);
+
   return novels.filter((novel) => {
-    if (
-      filters.minCharacters !== null &&
-      novel.textLength < filters.minCharacters
-    ) {
-      return false;
-    }
-    if (
-      filters.maxCharacters !== null &&
-      novel.textLength > filters.maxCharacters
-    ) {
-      return false;
-    }
-    if (
-      filters.minBookmarks !== null &&
-      novel.totalBookmarks < filters.minBookmarks
-    ) {
-      return false;
-    }
-    if (!filters.includeR18 && novel.xRestrict > 0) {
-      return false;
-    }
-    if (!filters.includeAi && novel.novelAiType > 0) {
-      return false;
-    }
+    if (filters.minCharacters !== null && novel.textLength < filters.minCharacters) return false;
+    if (filters.maxCharacters !== null && novel.textLength > filters.maxCharacters) return false;
+    if (filters.minBookmarks !== null && novel.totalBookmarks < filters.minBookmarks) return false;
+    if (filters.maxBookmarks !== null && novel.totalBookmarks > filters.maxBookmarks) return false;
+    if (filters.minViews !== null && novel.totalView < filters.minViews) return false;
+    if (filters.maxViews !== null && novel.totalView > filters.maxViews) return false;
+    if (filters.minComments !== null && novel.totalComments < filters.minComments) return false;
+
+    if (filters.ageRating === 'general' && novel.xRestrict !== 0) return false;
+    if (filters.ageRating === 'r18' && novel.xRestrict !== 1) return false;
+    if (filters.ageRating === 'r18g' && novel.xRestrict !== 2) return false;
+    if (filters.aiMode === 'exclude' && novel.novelAiType > 0) return false;
+    if (filters.aiMode === 'partial' && novel.novelAiType !== 1) return false;
+    if (filters.aiMode === 'full' && novel.novelAiType !== 2) return false;
+
+    if (filters.originalMode === 'original' && !novel.isOriginal) return false;
+    if (filters.originalMode === 'fanwork' && novel.isOriginal) return false;
+    if (filters.bookmarkState === 'bookmarked' && !novel.isBookmarked) return false;
+    if (filters.bookmarkState === 'not_bookmarked' && novel.isBookmarked) return false;
+
     if (filters.dateRange !== 'all') {
       const ageMs = Date.now() - new Date(novel.createDate).getTime();
-      const maximumAgeMs =
-        filters.dateRange === 'week'
-          ? 7 * 86_400_000
-          : filters.dateRange === 'month'
-            ? 31 * 86_400_000
-            : 366 * 86_400_000;
-      if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > maximumAgeMs) {
-        return false;
-      }
+      const maximumAgeMs = {
+        day: 86_400_000,
+        three_days: 3 * 86_400_000,
+        week: 7 * 86_400_000,
+        month: 31 * 86_400_000,
+        three_months: 93 * 86_400_000,
+        year: 366 * 86_400_000,
+      }[filters.dateRange];
+      if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > maximumAgeMs) return false;
     }
-    if (filters.seriesMode === 'series' && !novel.series) {
-      return false;
-    }
-    if (filters.seriesMode === 'standalone' && novel.series) {
-      return false;
-    }
-    if (filters.hideFinished && finishedNovelIds.has(novel.id)) {
-      return false;
-    }
+    const hasSeries = Object.keys(novel.series).length > 0;
+    if (filters.seriesMode === 'series' && !hasSeries) return false;
+    if (filters.seriesMode === 'standalone' && hasSeries) return false;
+    if (filters.hideFinished && finishedNovelIds.has(novel.id)) return false;
+
+    const novelTags = new Set(novel.tags.map((tag) => normalizeTagKey(tag.name)));
+    if (requiredTags.some((tag) => !novelTags.has(tag))) return false;
+    if (excludedTags.some((tag) => novelTags.has(tag))) return false;
     return true;
   });
 }
+
+export function normalizeAdvancedSearchFilters(value: unknown): AdvancedSearchFilters {
+  return normalizeSearchFilters(value);
+}
+
 
 async function upsertMute(
   kind: ContentMuteKind,
@@ -271,24 +290,49 @@ function normalizeTag(value: string): string {
 
 function normalizeSearchFilters(value: unknown): AdvancedSearchFilters {
   const candidate = isRecord(value) ? value : {};
+  const legacyAgeRating = candidate.includeR18 === false ? 'general' : 'all';
+  const legacyAiMode = candidate.includeAi === false ? 'exclude' : 'all';
   return {
     minCharacters: normalizeNullableNonNegativeNumber(candidate.minCharacters),
     maxCharacters: normalizeNullableNonNegativeNumber(candidate.maxCharacters),
     minBookmarks: normalizeNullableNonNegativeNumber(candidate.minBookmarks),
-    includeR18: candidate.includeR18 !== false,
-    includeAi: candidate.includeAi !== false,
+    maxBookmarks: normalizeNullableNonNegativeNumber(candidate.maxBookmarks),
+    minViews: normalizeNullableNonNegativeNumber(candidate.minViews),
+    maxViews: normalizeNullableNonNegativeNumber(candidate.maxViews),
+    minComments: normalizeNullableNonNegativeNumber(candidate.minComments),
     dateRange:
-      candidate.dateRange === 'week' ||
-      candidate.dateRange === 'month' ||
-      candidate.dateRange === 'year'
-        ? candidate.dateRange
-        : 'all',
+      candidate.dateRange === 'day' || candidate.dateRange === 'three_days' ||
+      candidate.dateRange === 'week' || candidate.dateRange === 'month' ||
+      candidate.dateRange === 'three_months' || candidate.dateRange === 'year'
+        ? candidate.dateRange : 'all',
     seriesMode:
       candidate.seriesMode === 'series' || candidate.seriesMode === 'standalone'
-        ? candidate.seriesMode
-        : 'all',
+        ? candidate.seriesMode : 'all',
+    originalMode:
+      candidate.originalMode === 'original' || candidate.originalMode === 'fanwork'
+        ? candidate.originalMode : 'all',
+    bookmarkState:
+      candidate.bookmarkState === 'bookmarked' || candidate.bookmarkState === 'not_bookmarked'
+        ? candidate.bookmarkState : 'all',
+    ageRating:
+      candidate.ageRating === 'general' || candidate.ageRating === 'r18' || candidate.ageRating === 'r18g'
+        ? candidate.ageRating : legacyAgeRating,
+    aiMode:
+      candidate.aiMode === 'exclude' || candidate.aiMode === 'partial' || candidate.aiMode === 'full'
+        ? candidate.aiMode : legacyAiMode,
+    requiredTags: normalizeTagList(candidate.requiredTags),
+    excludedTags: normalizeTagList(candidate.excludedTags),
     hideFinished: candidate.hideFinished === true,
   };
+}
+
+function normalizeTagList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => normalizeTag(String(item))).filter(Boolean))].slice(0, 20);
+}
+
+function normalizeTagKey(value: string): string {
+  return normalizeTag(value).toLocaleLowerCase('ja-JP');
 }
 
 function normalizeNullableNonNegativeNumber(value: unknown): number | null {

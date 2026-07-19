@@ -28,9 +28,10 @@ export interface AppUpdateInfo {
 }
 
 export const CURRENT_RELEASE_HIGHLIGHTS = [
-  'アプリ復帰後の検索結果消失を修正',
-  '復元された検索条件で自動再検索',
-  '0件時の無限ページ読み込みを修正',
+  '通常検索の競合と結果欠落を修正',
+  '空ページ時に続きから候補を自動探索',
+  'タグ・人気度・閲覧数など詳細条件を追加',
+  '全年齢／R-18／R-18G、AI種別を個別指定',
 ] as const;
 
 export function getCurrentAppVersion(): string {

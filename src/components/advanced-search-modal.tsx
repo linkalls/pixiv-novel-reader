@@ -39,6 +39,12 @@ export function AdvancedSearchModal({
   const [minBookmarks, setMinBookmarks] = useState(
     toInputValue(filters.minBookmarks),
   );
+  const [maxBookmarks, setMaxBookmarks] = useState(toInputValue(filters.maxBookmarks));
+  const [minViews, setMinViews] = useState(toInputValue(filters.minViews));
+  const [maxViews, setMaxViews] = useState(toInputValue(filters.maxViews));
+  const [minComments, setMinComments] = useState(toInputValue(filters.minComments));
+  const [requiredTags, setRequiredTags] = useState(filters.requiredTags.join(' '));
+  const [excludedTags, setExcludedTags] = useState(filters.excludedTags.join(' '));
 
   useEffect(() => {
     if (!visible) {
@@ -50,6 +56,12 @@ export function AdvancedSearchModal({
       setMinCharacters(toInputValue(filters.minCharacters));
       setMaxCharacters(toInputValue(filters.maxCharacters));
       setMinBookmarks(toInputValue(filters.minBookmarks));
+      setMaxBookmarks(toInputValue(filters.maxBookmarks));
+      setMinViews(toInputValue(filters.minViews));
+      setMaxViews(toInputValue(filters.maxViews));
+      setMinComments(toInputValue(filters.minComments));
+      setRequiredTags(filters.requiredTags.join(' '));
+      setExcludedTags(filters.excludedTags.join(' '));
     });
 
     return () => cancelAnimationFrame(frameId);
@@ -61,6 +73,12 @@ export function AdvancedSearchModal({
       minCharacters: parseOptionalNumber(minCharacters),
       maxCharacters: parseOptionalNumber(maxCharacters),
       minBookmarks: parseOptionalNumber(minBookmarks),
+      maxBookmarks: parseOptionalNumber(maxBookmarks),
+      minViews: parseOptionalNumber(minViews),
+      maxViews: parseOptionalNumber(maxViews),
+      minComments: parseOptionalNumber(minComments),
+      requiredTags: parseTags(requiredTags),
+      excludedTags: parseTags(excludedTags),
     });
   }
 
@@ -69,16 +87,30 @@ export function AdvancedSearchModal({
       minCharacters: null,
       maxCharacters: null,
       minBookmarks: null,
-      includeR18: true,
-      includeAi: true,
+      maxBookmarks: null,
+      minViews: null,
+      maxViews: null,
+      minComments: null,
       dateRange: 'all',
       seriesMode: 'all',
+      originalMode: 'all',
+      bookmarkState: 'all',
+      ageRating: 'all',
+      aiMode: 'all',
+      requiredTags: [],
+      excludedTags: [],
       hideFinished: false,
     };
     setDraft(next);
     setMinCharacters('');
     setMaxCharacters('');
     setMinBookmarks('');
+    setMaxBookmarks('');
+    setMinViews('');
+    setMaxViews('');
+    setMinComments('');
+    setRequiredTags('');
+    setExcludedTags('');
   }
 
   return (
@@ -138,12 +170,21 @@ export function AdvancedSearchModal({
 
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>人気度</Text>
-                <NumberField
-                  label="最低ブックマーク数"
-                  onChangeText={setMinBookmarks}
-                  styles={styles}
-                  value={minBookmarks}
-                />
+                <View style={styles.inputRow}>
+                  <NumberField label="最低ブックマーク" onChangeText={setMinBookmarks} styles={styles} value={minBookmarks} />
+                  <NumberField label="最大ブックマーク" onChangeText={setMaxBookmarks} styles={styles} value={maxBookmarks} />
+                </View>
+                <View style={styles.inputRow}>
+                  <NumberField label="最低閲覧数" onChangeText={setMinViews} styles={styles} value={minViews} />
+                  <NumberField label="最大閲覧数" onChangeText={setMaxViews} styles={styles} value={maxViews} />
+                </View>
+                <NumberField label="最低コメント数" onChangeText={setMinComments} styles={styles} value={minComments} />
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>タグ条件</Text>
+                <TextField label="必須タグ（空白・カンマ区切り）" onChangeText={setRequiredTags} styles={styles} value={requiredTags} />
+                <TextField label="除外タグ（空白・カンマ区切り）" onChangeText={setExcludedTags} styles={styles} value={excludedTags} />
               </View>
 
               <View style={styles.section}>
@@ -152,8 +193,11 @@ export function AdvancedSearchModal({
                   {(
                     [
                       ['all', '全期間'],
+                      ['day', '24時間以内'],
+                      ['three_days', '3日以内'],
                       ['week', '1週間以内'],
                       ['month', '1か月以内'],
+                      ['three_months', '3か月以内'],
                       ['year', '1年以内'],
                     ] as const
                   ).map(([value, label]) => (
@@ -195,23 +239,43 @@ export function AdvancedSearchModal({
               </View>
 
               <View style={styles.section}>
+                <Text style={styles.sectionTitle}>創作区分</Text>
+                <View style={styles.chipRow}>
+                  {([['all', 'すべて'], ['original', 'オリジナル'], ['fanwork', '二次創作']] as const).map(([value, label]) => (
+                    <ChoiceChip active={draft.originalMode === value} key={value} label={label} onPress={() => setDraft({ ...draft, originalMode: value })} styles={styles} />
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>ブックマーク状態</Text>
+                <View style={styles.chipRow}>
+                  {([['all', 'すべて'], ['bookmarked', '登録済み'], ['not_bookmarked', '未登録']] as const).map(([value, label]) => (
+                    <ChoiceChip active={draft.bookmarkState === value} key={value} label={label} onPress={() => setDraft({ ...draft, bookmarkState: value })} styles={styles} />
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>年齢区分</Text>
+                <View style={styles.chipRow}>
+                  {([['all', 'すべて'], ['general', '全年齢'], ['r18', 'R-18'], ['r18g', 'R-18G']] as const).map(([value, label]) => (
+                    <ChoiceChip active={draft.ageRating === value} key={value} label={label} onPress={() => setDraft({ ...draft, ageRating: value })} styles={styles} />
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>AI生成</Text>
+                <View style={styles.chipRow}>
+                  {([['all', 'すべて'], ['exclude', 'AI除外'], ['partial', '一部AIのみ'], ['full', 'AI生成のみ']] as const).map(([value, label]) => (
+                    <ChoiceChip active={draft.aiMode === value} key={value} label={label} onPress={() => setDraft({ ...draft, aiMode: value })} styles={styles} />
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.section}>
                 <Text style={styles.sectionTitle}>除外条件</Text>
-                <ToggleRow
-                  label="R-18作品を表示"
-                  onPress={() =>
-                    setDraft({ ...draft, includeR18: !draft.includeR18 })
-                  }
-                  styles={styles}
-                  value={draft.includeR18}
-                />
-                <ToggleRow
-                  label="AI生成作品を表示"
-                  onPress={() =>
-                    setDraft({ ...draft, includeAi: !draft.includeAi })
-                  }
-                  styles={styles}
-                  value={draft.includeAi}
-                />
                 <ToggleRow
                   label="読了済みを除外"
                   onPress={() =>
@@ -284,6 +348,15 @@ function NumberField({
   );
 }
 
+function TextField({ label, onChangeText, styles, value }: { label: string; onChangeText: (value: string) => void; styles: ReturnType<typeof createStyles>; value: string }) {
+  return (
+    <View style={styles.numberField}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput autoCapitalize="none" onChangeText={onChangeText} placeholder="指定なし" placeholderTextColor={styles.placeholder.color} style={styles.input} value={value} />
+    </View>
+  );
+}
+
 function ChoiceChip({
   active,
   label,
@@ -349,6 +422,10 @@ function parseOptionalNumber(value: string): number | null {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
+}
+
+function parseTags(value: string): string[] {
+  return [...new Set(value.split(/[\s,、]+/).map((item) => item.trim().replace(/^#+/, '')).filter(Boolean))].slice(0, 20);
 }
 
 function createStyles(colors: AppColors) {
