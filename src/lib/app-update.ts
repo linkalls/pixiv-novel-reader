@@ -28,9 +28,9 @@ export interface AppUpdateInfo {
 }
 
 export const CURRENT_RELEASE_HIGHLIGHTS = [
-  '古い更新APKを自動削除',
-  'インストール再開用APKだけを一時保持',
-  '更新完了後のAPKを次回起動時に削除',
+  'アプリ復帰後の検索結果消失を修正',
+  '復元された検索条件で自動再検索',
+  '0件時の無限ページ読み込みを修正',
 ] as const;
 
 export function getCurrentAppVersion(): string {

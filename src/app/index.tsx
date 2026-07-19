@@ -1000,6 +1000,31 @@ export default function HomeScreen() {
     }, [activeTab, reloadReadingStatuses, reloadSearchHistory]),
   );
 
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      activeTab !== 'search' ||
+      !submittedSearchWord ||
+      submittedSearchRef.current ||
+      feedsRef.current.search.isLoading
+    ) {
+      return;
+    }
+
+    void requestFeed('search', {
+      searchWord: submittedSearchWord,
+      searchSort,
+      searchTarget,
+    });
+  }, [
+    activeTab,
+    isAuthenticated,
+    requestFeed,
+    searchSort,
+    searchTarget,
+    submittedSearchWord,
+  ]);
+
   const headerTitle = useMemo(() => {
     switch (activeTab) {
       case 'recommended':
@@ -1351,7 +1376,12 @@ export default function HomeScreen() {
           </>
         }
         onEndReached={() => {
-          if (activeFeed.nextUrl && !activeFeed.isLoadingMore) {
+          if (
+            activeFeed.hasLoaded &&
+            activeFeed.novels.length > 0 &&
+            activeFeed.nextUrl &&
+            !activeFeed.isLoadingMore
+          ) {
             void requestFeed(activeTab, { append: true });
           }
         }}
