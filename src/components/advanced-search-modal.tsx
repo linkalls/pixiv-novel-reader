@@ -97,6 +97,7 @@ export function AdvancedSearchModal({
       bookmarkState: 'all',
       ageRating: 'all',
       aiMode: 'all',
+      language: 'all',
       requiredTags: [],
       excludedTags: [],
       hideFinished: false,
@@ -270,6 +271,15 @@ export function AdvancedSearchModal({
                 <View style={styles.chipRow}>
                   {([['all', 'すべて'], ['exclude', 'AI除外'], ['partial', '一部AIのみ'], ['full', 'AI生成のみ']] as const).map(([value, label]) => (
                     <ChoiceChip active={draft.aiMode === value} key={value} label={label} onPress={() => setDraft({ ...draft, aiMode: value })} styles={styles} />
+                  ))}
+                </View>
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>言語（タイトル・説明・タグから推定）</Text>
+                <View style={styles.chipRow}>
+                  {([['all', 'すべて'], ['japanese', '日本語'], ['english', '英語'], ['chinese', '中国語'], ['korean', '韓国語'], ['other', 'その他']] as const).map(([value, label]) => (
+                    <ChoiceChip active={draft.language === value} key={value} label={label} onPress={() => setDraft({ ...draft, language: value })} styles={styles} />
                   ))}
                 </View>
               </View>

@@ -28,9 +28,9 @@ export interface AppUpdateInfo {
 }
 
 export const CURRENT_RELEASE_HIGHLIGHTS = [
-  'タグ検索後の手入力をキーワード検索へ自動復帰',
-  'タグ完全一致が残り続ける問題を修正',
-  '検索0件時の表示を修正',
+  '高度な検索に言語フィルターを追加',
+  '日本語・英語・中国語・韓国語・その他に対応',
+  'タイトル・説明・タグから言語を推定',
 ] as const;
 
 export function getCurrentAppVersion(): string {
