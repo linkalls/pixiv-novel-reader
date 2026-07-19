@@ -171,6 +171,7 @@ export default function HomeScreen() {
   const params = useLocalSearchParams<{ tag?: string | string[] }>();
   const requestedTag = Array.isArray(params.tag) ? params.tag[0] : params.tag;
   const handledTagRef = useRef<string | null>(null);
+  const tagSearchModeRef = useRef(false);
   const { colors, isDark, mode: themeMode, setMode: setThemeMode } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [activeTab, setActiveTab] = useState<AppTab>('recommended');
@@ -553,6 +554,7 @@ export default function HomeScreen() {
         return;
       }
 
+      tagSearchModeRef.current = true;
       setActiveTab('search');
       setSearchWord(tagName);
       setSubmittedSearchWord(tagName);
@@ -858,6 +860,7 @@ export default function HomeScreen() {
     target: NovelSearchTarget = searchTarget,
   ) {
     const word = searchWord.trim();
+    const resolvedTarget = tagSearchModeRef.current ? target : searchTarget;
 
     if (word.length === 0) {
       updateFeed('search', (current) => ({
@@ -871,12 +874,13 @@ export default function HomeScreen() {
     void requestFeed('search', {
       searchWord: word,
       searchSort: sort,
-      searchTarget: target,
+      searchTarget: resolvedTarget,
       searchFilters: searchFiltersRef.current,
     });
   }
 
   function runSearchHistoryItem(item: SearchHistoryItem) {
+    tagSearchModeRef.current = false;
     setActiveTab('search');
     setSearchWord(item.word);
     setSubmittedSearchWord(item.word);
@@ -1409,6 +1413,7 @@ export default function HomeScreen() {
                 }
               }}
               onSearchTargetChange={(target) => {
+                tagSearchModeRef.current = false;
                 setSearchTarget(target);
 
                 if (searchWord.trim().length > 0) {
@@ -1424,7 +1429,13 @@ export default function HomeScreen() {
               searchSort={searchSort}
               searchTarget={searchTarget}
               searchWord={searchWord}
-              setSearchWord={setSearchWord}
+              onSearchWordChange={(value) => {
+                if (tagSearchModeRef.current && value !== searchWord) {
+                  tagSearchModeRef.current = false;
+                  setSearchTarget('keyword');
+                }
+                setSearchWord(value);
+              }}
             />
           </>
         }
@@ -1682,7 +1693,7 @@ interface FeedControlsProps {
   searchWord: string;
   searchSort: NovelSearchSort;
   searchTarget: NovelSearchTarget;
-  setSearchWord: (value: string) => void;
+  onSearchWordChange: (value: string) => void;
   onBookmarkVisibilityChange: (value: BookmarkVisibility) => void;
   onClearSearchHistory: () => void;
   onDeleteSearchHistoryItem: (item: SearchHistoryItem) => void;
@@ -1704,7 +1715,7 @@ function FeedControls({
   searchWord,
   searchSort,
   searchTarget,
-  setSearchWord,
+  onSearchWordChange,
   onBookmarkVisibilityChange,
   onClearSearchHistory,
   onDeleteSearchHistoryItem,
@@ -1797,7 +1808,7 @@ function FeedControls({
         <TextInput
           autoCapitalize="none"
           autoCorrect={false}
-          onChangeText={setSearchWord}
+          onChangeText={onSearchWordChange}
           onSubmitEditing={onSearch}
           placeholder="タイトル・タグ・キーワード"
           placeholderTextColor={colors.placeholder}
@@ -2090,13 +2101,19 @@ function EmptyFeed({
     <View style={styles.emptyState}>
       <Text style={styles.emptyEmoji}>{tab === 'search' ? '🔎' : '📚'}</Text>
       <Text style={styles.emptyTitle}>
-        {tab === 'search' ? '小説を検索' : '小説が見つかりませんでした'}
+        {tab === 'search'
+          ? hasSearchQuery && hasLoaded
+            ? '該当する小説が見つかりませんでした'
+            : '小説を検索'
+          : '小説が見つかりませんでした'}
       </Text>
       <Text style={styles.emptyText}>
         {tab === 'bookmarks'
           ? '公開／非公開を切り替えて確認してください。'
           : tab === 'search'
-            ? 'キーワードを入力して検索してください。'
+            ? hasSearchQuery && hasLoaded
+              ? '検索対象や詳細条件を変更して、もう一度検索してください。'
+              : 'キーワードを入力して検索してください。'
             : '条件を変更するか、時間を置いて更新してください。'}
       </Text>
     </View>

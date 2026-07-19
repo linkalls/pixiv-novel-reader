@@ -28,10 +28,9 @@ export interface AppUpdateInfo {
 }
 
 export const CURRENT_RELEASE_HIGHLIGHTS = [
-  '通常検索の競合と結果欠落を修正',
-  '空ページ時に続きから候補を自動探索',
-  'タグ・人気度・閲覧数など詳細条件を追加',
-  '全年齢／R-18／R-18G、AI種別を個別指定',
+  'タグ検索後の手入力をキーワード検索へ自動復帰',
+  'タグ完全一致が残り続ける問題を修正',
+  '検索0件時の表示を修正',
 ] as const;
 
 export function getCurrentAppVersion(): string {
