@@ -28,9 +28,9 @@ export interface AppUpdateInfo {
 }
 
 export const CURRENT_RELEASE_HIGHLIGHTS = [
-  '既存データベースの本棚移行エラーを修正',
-  'ライブラリを開けない問題を解消',
-  '検索中の空画面表示のちらつきを修正',
+  'バックアップ操作中のボタンちらつきを修正',
+  '実行中の操作だけにローディング表示を追加',
+  '無関係な操作ボタンの暗転を解消',
 ] as const;
 
 export function getCurrentAppVersion(): string {

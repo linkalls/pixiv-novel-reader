@@ -544,7 +544,7 @@ export function ReadingInsightsView({
           <Pressable
             accessibilityRole="switch"
             accessibilityState={{ checked: automaticBackup?.enabled ?? false }}
-            disabled={busyAction !== null}
+            disabled={busyAction === 'auto-toggle'}
             onPress={() => void toggleAutomaticBackup()}
             style={({ pressed }) => [styles.autoBackupToggle, pressed && styles.pressed]}
           >
@@ -572,19 +572,22 @@ export function ReadingInsightsView({
           </Pressable>
           <View style={styles.autoBackupActions}>
             <SmallAction
-              disabled={busyAction !== null}
+              busy={busyAction === 'auto-create'}
+              disabled={busyAction === 'auto-create'}
               label="今すぐ作成"
               onPress={() => void createAutoBackupNow()}
               styles={styles}
             />
             <SmallAction
-              disabled={busyAction !== null || !automaticBackup?.latestUri}
+              busy={busyAction === 'auto-restore'}
+              disabled={!automaticBackup?.latestUri || busyAction === 'auto-restore'}
               label="最新を復元"
               onPress={confirmRestoreLatestAutomaticBackup}
               styles={styles}
             />
             <SmallAction
-              disabled={busyAction !== null || !automaticBackup?.latestUri}
+              busy={busyAction === 'auto-share'}
+              disabled={!automaticBackup?.latestUri || busyAction === 'auto-share'}
               label="最新を共有"
               onPress={() => void shareLatestAutoBackup()}
               styles={styles}
@@ -594,7 +597,7 @@ export function ReadingInsightsView({
         <View style={styles.actionCard}>
           <InsightAction
             busy={busyAction === 'export'}
-            disabled={busyAction !== null}
+            disabled={busyAction === 'export'}
             label="バックアップを書き出す"
             onPress={() => void exportBackup()}
             primary
@@ -602,7 +605,7 @@ export function ReadingInsightsView({
           />
           <InsightAction
             busy={busyAction === 'restore'}
-            disabled={busyAction !== null}
+            disabled={busyAction === 'restore'}
             label="バックアップから復元"
             onPress={() => void chooseBackupForRestore()}
             styles={styles}
@@ -610,7 +613,7 @@ export function ReadingInsightsView({
           <InsightAction
             busy={busyAction === 'clear'}
             danger
-            disabled={busyAction !== null}
+            disabled={busyAction === 'clear'}
             label="読書統計をリセット"
             onPress={confirmClearStatistics}
             styles={styles}
@@ -758,11 +761,13 @@ function InsightAction({
 }
 
 function SmallAction({
+  busy,
   disabled,
   label,
   onPress,
   styles,
 }: {
+  busy: boolean;
   disabled: boolean;
   label: string;
   onPress: () => void;
@@ -779,6 +784,9 @@ function SmallAction({
         pressed && styles.pressed,
       ]}
     >
+      {busy ? (
+        <ActivityIndicator color={styles.smallActionText.color} size="small" />
+      ) : null}
       <Text style={styles.smallActionText}>{label}</Text>
     </Pressable>
   );
