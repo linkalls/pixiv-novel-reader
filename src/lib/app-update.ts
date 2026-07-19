@@ -28,9 +28,9 @@ export interface AppUpdateInfo {
 }
 
 export const CURRENT_RELEASE_HIGHLIGHTS = [
-  'バックアップ操作中のボタンちらつきを修正',
-  '実行中の操作だけにローディング表示を追加',
-  '無関係な操作ボタンの暗転を解消',
+  '古い更新APKを自動削除',
+  'インストール再開用APKだけを一時保持',
+  '更新完了後のAPKを次回起動時に削除',
 ] as const;
 
 export function getCurrentAppVersion(): string {

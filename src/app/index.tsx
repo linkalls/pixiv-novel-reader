@@ -49,6 +49,7 @@ import {
   type AppUpdateInfo,
 } from '@/lib/app-update';
 import {
+  cleanupInstalledUpdateApk,
   downloadUpdateApk,
   launchUpdateInstaller,
   openUnknownAppInstallSettings,
@@ -606,6 +607,10 @@ export default function HomeScreen() {
       }
     }, [persistRefreshToken, reloadReadingStatuses, updateFeed],
   );
+
+  useEffect(() => {
+    void cleanupInstalledUpdateApk();
+  }, []);
 
   useEffect(() => {
     let isMounted = true;

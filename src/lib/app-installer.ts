@@ -9,6 +9,7 @@ import {
   deleteAsync,
   getContentUriAsync,
   getInfoAsync,
+  readDirectoryAsync,
 } from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
@@ -16,6 +17,35 @@ import type { AppUpdateAsset } from './app-update-assets';
 
 const APK_MIME_TYPE = 'application/vnd.android.package-archive';
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
+
+const UPDATE_APK_PREFIX = 'pixiv-novel-reader-update-';
+const UPDATE_APK_SUFFIX = '.apk';
+
+async function cleanupUpdateApks(keepUri?: string): Promise<void> {
+  if (!cacheDirectory) return;
+  const entries = await readDirectoryAsync(cacheDirectory).catch(() => []);
+  await Promise.all(
+    entries
+      .filter(
+        (name) =>
+          name.startsWith(UPDATE_APK_PREFIX) && name.endsWith(UPDATE_APK_SUFFIX),
+      )
+      .map(async (name) => {
+        const uri = `${cacheDirectory}${name}`;
+        if (uri === keepUri) return;
+        await deleteAsync(uri, { idempotent: true }).catch(() => {});
+      }),
+  );
+}
+
+export async function cleanupInstalledUpdateApk(): Promise<void> {
+  if (Platform.OS !== 'android' || !cacheDirectory) return;
+  const currentVersion = Constants.expoConfig?.version;
+  if (!currentVersion) return;
+  const safeVersion = currentVersion.replace(/[^0-9A-Za-z._-]/g, '_');
+  const installedApkUri = `${cacheDirectory}${UPDATE_APK_PREFIX}${safeVersion}${UPDATE_APK_SUFFIX}`;
+  await deleteAsync(installedApkUri, { idempotent: true }).catch(() => {});
+}
 
 export interface DownloadedUpdateApk {
   assetName: string;
@@ -36,7 +66,8 @@ export async function downloadUpdateApk(
   }
 
   const safeVersion = version.replace(/[^0-9A-Za-z._-]/g, '_');
-  const localUri = `${cacheDirectory}pixiv-novel-reader-update-${safeVersion}.apk`;
+  const localUri = `${cacheDirectory}${UPDATE_APK_PREFIX}${safeVersion}${UPDATE_APK_SUFFIX}`;
+  await cleanupUpdateApks(localUri);
   const existing = await getInfoAsync(localUri).catch(() => null);
   if (existing?.exists && existing.size === asset.size && asset.size > 0) {
     onProgress?.(1);
