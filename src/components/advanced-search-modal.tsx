@@ -276,9 +276,9 @@ export function AdvancedSearchModal({
               </View>
 
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>言語（タイトル・説明・タグから推定）</Text>
+                <Text style={styles.sectionTitle}>作品の言語（Pixiv公式設定）</Text>
                 <View style={styles.chipRow}>
-                  {([['all', 'すべて'], ['japanese', '日本語'], ['english', '英語'], ['chinese', '中国語'], ['korean', '韓国語'], ['other', 'その他']] as const).map(([value, label]) => (
+                  {([['all', 'すべて'], ['ja', '日本語'], ['en', '英語'], ['ko', '韓国語'], ['zh-cn', '簡体中文'], ['zh-tw', '繁體中文'], ['other', 'その他']] as const).map(([value, label]) => (
                     <ChoiceChip active={draft.language === value} key={value} label={label} onPress={() => setDraft({ ...draft, language: value })} styles={styles} />
                   ))}
                 </View>

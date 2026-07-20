@@ -28,9 +28,9 @@ export interface AppUpdateInfo {
 }
 
 export const CURRENT_RELEASE_HIGHLIGHTS = [
-  '高度な検索に言語フィルターを追加',
-  '日本語・英語・中国語・韓国語・その他に対応',
-  'タイトル・説明・タグから言語を推定',
+  'Pixiv公式の作品言語フィルターへ変更',
+  '独自の言語推定を廃止',
+  '日本語・英語・韓国語・簡体字・繁体字に対応',
 ] as const;
 
 export function getCurrentAppVersion(): string {

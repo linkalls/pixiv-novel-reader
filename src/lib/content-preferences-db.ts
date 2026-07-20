@@ -1,7 +1,6 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 
 import { getLibraryDatabase } from './library-db';
-import { detectNovelLanguage, type NovelLanguage } from './novel-language';
 
 export type ContentMuteKind = 'author' | 'tag';
 
@@ -26,7 +25,7 @@ export interface AdvancedSearchFilters {
   bookmarkState: 'all' | 'bookmarked' | 'not_bookmarked';
   ageRating: 'all' | 'general' | 'r18' | 'r18g';
   aiMode: 'all' | 'exclude' | 'partial' | 'full';
-  language: 'all' | NovelLanguage;
+  language: 'all' | 'ja' | 'en' | 'ko' | 'zh-cn' | 'zh-tw' | 'other';
   requiredTags: string[];
   excludedTags: string[];
   hideFinished: boolean;
@@ -230,7 +229,6 @@ export function applyAdvancedSearchFilters(
     if (filters.aiMode === 'exclude' && novel.novelAiType > 0) return false;
     if (filters.aiMode === 'partial' && novel.novelAiType !== 1) return false;
     if (filters.aiMode === 'full' && novel.novelAiType !== 2) return false;
-    if (filters.language !== 'all' && detectNovelLanguage(novel) !== filters.language) return false;
 
     if (filters.originalMode === 'original' && !novel.isOriginal) return false;
     if (filters.originalMode === 'fanwork' && novel.isOriginal) return false;
@@ -325,10 +323,19 @@ function normalizeSearchFilters(value: unknown): AdvancedSearchFilters {
       candidate.aiMode === 'exclude' || candidate.aiMode === 'partial' || candidate.aiMode === 'full'
         ? candidate.aiMode : legacyAiMode,
     language:
-      candidate.language === 'japanese' || candidate.language === 'english' ||
-      candidate.language === 'chinese' || candidate.language === 'korean' ||
-      candidate.language === 'other'
-        ? candidate.language : 'all',
+      candidate.language === 'ja' || candidate.language === 'en' ||
+      candidate.language === 'ko' || candidate.language === 'zh-cn' ||
+      candidate.language === 'zh-tw' || candidate.language === 'other'
+        ? candidate.language
+        : candidate.language === 'japanese'
+          ? 'ja'
+          : candidate.language === 'english'
+            ? 'en'
+            : candidate.language === 'korean'
+              ? 'ko'
+              : candidate.language === 'chinese'
+                ? 'zh-cn'
+                : 'all',
     requiredTags: normalizeTagList(candidate.requiredTags),
     excludedTags: normalizeTagList(candidate.excludedTags),
     hideFinished: candidate.hideFinished === true,

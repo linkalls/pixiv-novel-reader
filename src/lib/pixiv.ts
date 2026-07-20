@@ -33,6 +33,7 @@ export type NovelSearchTarget =
   | 'partial_match_for_tags'
   | 'exact_match_for_tags'
   | 'title_and_caption';
+export type NovelWorkLanguage = 'ja' | 'en' | 'ko' | 'zh-cn' | 'zh-tw' | 'other';
 
 type PixivSearchDuration =
   (typeof SearchDuration)[keyof typeof SearchDuration];
@@ -282,11 +283,16 @@ export async function searchNovels(
   sort: NovelSearchSort,
   target: NovelSearchTarget,
   nextUrl?: string | null,
+  workLanguage?: NovelWorkLanguage | null,
 ): Promise<NovelPageResult> {
   const normalizedWord = word.trim();
 
   if (normalizedWord.length === 0) {
     throw new Error('検索語を入力してください');
+  }
+
+  if (workLanguage) {
+    return searchOfficialWebNovels(normalizedWord, sort, target, workLanguage, nextUrl);
   }
 
   // next_urlにはoffsetだけでなく、検索語・検索対象・期間・日付範囲などが
@@ -311,6 +317,141 @@ export async function searchNovels(
     nextUrl: page.nextUrl,
     refreshToken: requireClient().getRefreshToken(),
   };
+}
+
+
+interface OfficialNovelSearchItem {
+  aiType?: unknown;
+  bookmarkCount?: unknown;
+  bookmarkData?: unknown;
+  createDate?: unknown;
+  description?: unknown;
+  id?: unknown;
+  isOriginal?: unknown;
+  language?: unknown;
+  profileImageUrl?: unknown;
+  restrict?: unknown;
+  seriesId?: unknown;
+  seriesTitle?: unknown;
+  tags?: unknown;
+  textCount?: unknown;
+  title?: unknown;
+  url?: unknown;
+  userId?: unknown;
+  userName?: unknown;
+  xRestrict?: unknown;
+}
+
+async function searchOfficialWebNovels(
+  word: string,
+  sort: NovelSearchSort,
+  target: NovelSearchTarget,
+  workLanguage: NovelWorkLanguage,
+  nextUrl?: string | null,
+): Promise<NovelPageResult> {
+  const page = nextUrl ? Number(new URL(nextUrl).searchParams.get('p') ?? '1') : 1;
+  const params = new URLSearchParams({
+    word,
+    order: toOfficialSearchOrder(sort),
+    mode: 'all',
+    p: String(Number.isInteger(page) && page > 0 ? page : 1),
+    s_mode: toOfficialSearchTarget(target),
+    work_lang: workLanguage,
+  });
+  const url = `https://www.pixiv.net/ajax/search/novels/${encodeURIComponent(word)}?${params.toString()}`;
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json', 'User-Agent': 'pixiv-novel-reader' },
+  });
+  if (!response.ok) {
+    throw new Error(`Pixiv公式検索を取得できませんでした (${response.status})`);
+  }
+  const payload = await response.json() as {
+    error?: unknown;
+    message?: unknown;
+    body?: { novel?: { data?: unknown; lastPage?: unknown } };
+  };
+  if (payload.error === true) {
+    throw new Error(typeof payload.message === 'string' ? payload.message : 'Pixiv公式検索でエラーが発生しました');
+  }
+  const rawItems = payload.body?.novel?.data;
+  const novels = Array.isArray(rawItems)
+    ? rawItems.map(mapOfficialNovelSearchItem).filter((item): item is PixivNovelItem => item !== null)
+    : [];
+  const lastPage = Number(payload.body?.novel?.lastPage ?? page);
+  const nextPage = page < lastPage ? page + 1 : null;
+  const nextPageUrl = nextPage
+    ? `https://www.pixiv.net/ajax/search/novels/${encodeURIComponent(word)}?${new URLSearchParams({
+        word,
+        order: toOfficialSearchOrder(sort),
+        mode: 'all',
+        p: String(nextPage),
+        s_mode: toOfficialSearchTarget(target),
+        work_lang: workLanguage,
+      }).toString()}`
+    : null;
+  return {
+    novels,
+    nextUrl: nextPageUrl,
+    refreshToken: requireClient().getRefreshToken(),
+  };
+}
+
+function mapOfficialNovelSearchItem(value: unknown): PixivNovelItem | null {
+  if (!isRecord(value)) return null;
+  const item = value as OfficialNovelSearchItem;
+  const id = Number(item.id);
+  const userId = Number(item.userId);
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(userId) || userId <= 0) return null;
+  const cover = typeof item.url === 'string' ? item.url : '';
+  const profile = typeof item.profileImageUrl === 'string' ? item.profileImageUrl : '';
+  const seriesId = Number(item.seriesId);
+  return {
+    id,
+    title: typeof item.title === 'string' ? item.title : String(id),
+    caption: typeof item.description === 'string' ? item.description : '',
+    restrict: Number(item.restrict) || 0,
+    xRestrict: Number(item.xRestrict) || 0,
+    isOriginal: item.isOriginal === true,
+    imageUrls: { squareMedium: cover, medium: cover, large: cover },
+    createDate: typeof item.createDate === 'string' ? item.createDate : new Date(0).toISOString(),
+    tags: Array.isArray(item.tags)
+      ? item.tags.filter((tag): tag is string => typeof tag === 'string').map((name) => ({ name, translatedName: null }))
+      : [],
+    pageCount: 1,
+    textLength: Number(item.textCount) || 0,
+    user: {
+      id: userId,
+      name: typeof item.userName === 'string' ? item.userName : String(userId),
+      account: '',
+      profileImageUrls: { medium: profile },
+      isFollowed: false,
+    },
+    series: Number.isInteger(seriesId) && seriesId > 0
+      ? { id: seriesId, title: typeof item.seriesTitle === 'string' ? item.seriesTitle : String(seriesId) }
+      : {},
+    isBookmarked: isRecord(item.bookmarkData),
+    totalBookmarks: Number(item.bookmarkCount) || 0,
+    totalView: 0,
+    visible: true,
+    totalComments: 0,
+    isMuted: false,
+    isMypixivOnly: false,
+    isXRestricted: Number(item.xRestrict) > 0,
+    novelAiType: Number(item.aiType) || 0,
+  };
+}
+
+function toOfficialSearchOrder(sort: NovelSearchSort): string {
+  if (sort === 'date_asc') return 'date';
+  if (sort === 'popular_desc') return 'popular_d';
+  return 'date_d';
+}
+
+function toOfficialSearchTarget(target: NovelSearchTarget): string {
+  if (target === 'exact_match_for_tags') return 's_tag_full';
+  if (target === 'title_and_caption') return 'tc';
+  if (target === 'keyword') return 'tag_tc';
+  return 's_tag';
 }
 
 export async function fetchNovelDetail(

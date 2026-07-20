@@ -389,6 +389,7 @@ export default function HomeScreen() {
               searchRequest.sort,
               searchRequest.target,
               nextUrl,
+              searchRequest.filters.language === 'all' ? null : searchRequest.filters.language,
             );
             break;
           }
@@ -480,6 +481,7 @@ export default function HomeScreen() {
               searchRequest.sort,
               searchRequest.target,
               result.nextUrl,
+              searchRequest.filters.language === 'all' ? null : searchRequest.filters.language,
             );
             await persistRefreshToken(additionalResult.refreshToken);
             let additionalNovels = await filterMutedNovels(additionalResult.novels);
