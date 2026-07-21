@@ -1537,18 +1537,35 @@ export default function HomeScreen() {
           style={styles.modalBackdrop}
         >
           <Pressable onPress={() => {}} style={styles.settingsCard}>
+            <View style={styles.settingsHeader}>
+              <View>
+                <Text style={styles.settingsEyebrow}>APP SETTINGS</Text>
+                <Text style={styles.settingsTitle}>設定</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="設定を閉じる"
+                accessibilityRole="button"
+                onPress={() => setIsSettingsVisible(false)}
+                style={({ pressed }) => [
+                  styles.settingsCloseButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.settingsCloseText}>×</Text>
+              </Pressable>
+            </View>
             <ScrollView
               contentContainerStyle={styles.settingsContent}
               showsVerticalScrollIndicator={false}
             >
-            <Text style={styles.settingsTitle}>アカウント</Text>
+            <Text style={styles.settingsSectionTitle}>アカウント</Text>
             <Text style={styles.settingsDescription}>
               {userId === null
                 ? 'オフラインモードで利用中'
                 : `Pixivへ接続済み · userId ${userId}`}
             </Text>
             <Text style={styles.settingsNote}>
-              ログアウトすると、端末に保存した認証情報を削除します。
+              認証情報は端末内だけに保存されます。ログアウトするとrefresh tokenを削除します。
             </Text>
             <View style={styles.settingsDivider} />
             <Text style={styles.settingsSectionTitle}>表示テーマ</Text>
@@ -1600,6 +1617,77 @@ export default function HomeScreen() {
                   ]}
                 />
               </View>
+            </Pressable>
+
+            <View style={styles.settingsDivider} />
+            <Text style={styles.settingsSectionTitle}>ライブラリとデータ</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                setIsSettingsVisible(false);
+                selectTab('library');
+              }}
+              style={({ pressed }) => [
+                styles.settingsActionRow,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.settingsActionTextArea}>
+                <Text style={styles.settingsActionTitle}>ライブラリ管理</Text>
+                <Text style={styles.settingsActionDescription}>
+                  履歴、本棚、しおり、保存作品、統計、バックアップ
+                </Text>
+              </View>
+              <Text style={styles.settingsActionArrow}>›</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                Alert.alert(
+                  '検索履歴を削除',
+                  'ピン留めした検索は残し、通常の検索履歴だけ削除します。',
+                  [
+                    { text: 'キャンセル', style: 'cancel' },
+                    {
+                      text: '削除',
+                      style: 'destructive',
+                      onPress: () => void clearSearchHistory(),
+                    },
+                  ],
+                );
+              }}
+              style={({ pressed }) => [
+                styles.settingsActionRow,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.settingsActionTextArea}>
+                <Text style={styles.settingsActionTitle}>検索履歴を整理</Text>
+                <Text style={styles.settingsActionDescription}>
+                  ピン留め以外の履歴を削除
+                </Text>
+              </View>
+              <Text style={styles.settingsActionArrow}>›</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                void cleanupInstalledUpdateApk().then(() => {
+                  Alert.alert('整理完了', '古い更新用APKを削除しました。');
+                });
+              }}
+              style={({ pressed }) => [
+                styles.settingsActionRow,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.settingsActionTextArea}>
+                <Text style={styles.settingsActionTitle}>更新ファイルを整理</Text>
+                <Text style={styles.settingsActionDescription}>
+                  インストール済みの古いAPKを削除
+                </Text>
+              </View>
+              <Text style={styles.settingsActionArrow}>›</Text>
             </Pressable>
 
             <View style={styles.settingsDivider} />
@@ -2827,15 +2915,77 @@ function createStyles(colors: AppColors) {
   },
   settingsCard: {
     width: '100%',
-    maxHeight: '88%',
-    maxWidth: 380,
-    gap: 12,
-    padding: 22,
-    borderRadius: 22,
+    maxHeight: '92%',
+    maxWidth: 430,
+    overflow: 'hidden',
+    borderRadius: 24,
     backgroundColor: colors.surface,
   },
+  settingsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  settingsEyebrow: {
+    color: colors.accentStrong,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  settingsCloseButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 20,
+    backgroundColor: colors.surfaceAlt,
+  },
+  settingsCloseText: {
+    color: colors.text,
+    fontSize: 24,
+    lineHeight: 27,
+    fontWeight: '600',
+  },
   settingsContent: {
+    gap: 12,
     padding: 20,
+    paddingBottom: 28,
+  },
+  settingsActionRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceAlt,
+  },
+  settingsActionTextArea: {
+    flex: 1,
+    gap: 3,
+  },
+  settingsActionTitle: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  settingsActionDescription: {
+    color: colors.textMuted,
+    fontSize: 10,
+    lineHeight: 16,
+  },
+  settingsActionArrow: {
+    color: colors.accent,
+    fontSize: 24,
+    fontWeight: '700',
   },
   notificationRow: {
     minHeight: 66,
