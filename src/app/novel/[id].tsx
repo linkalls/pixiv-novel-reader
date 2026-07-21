@@ -79,6 +79,7 @@ import {
 } from '@/lib/offline-series-subscriptions';
 import { emitNovelChanged } from '@/lib/novel-events';
 import {
+  addNovelToReadingQueue,
   excludeRecommendation,
   listExcludedRecommendationIds,
   type ReaderMark,
@@ -2073,6 +2074,15 @@ export default function NovelReaderScreen() {
           setIsMoreVisible(false);
           requestAnimationFrame(() => setIsBookshelfVisible(true));
         }}
+        onAddToQueue={() => {
+          setIsMoreVisible(false);
+          if (!detail) return;
+          void addNovelToReadingQueue(detail)
+            .then(() => showStatus('読む順番に追加しました'))
+            .catch((error) =>
+              showStatus(`読む順番に追加できませんでした: ${toErrorMessage(error)}`),
+            );
+        }}
         onOpenMarks={() => {
           setIsMoreVisible(false);
           requestAnimationFrame(() => setIsMarksVisible(true));
@@ -3116,6 +3126,7 @@ interface MoreActionsModalProps {
   offlineImageProgress: string | null;
   onClose: () => void;
   onOpenBookshelf: () => void;
+  onAddToQueue: () => void;
   onOpenDetail: () => void;
   onOpenExclusions: () => void;
   onOpenMarks: () => void;
@@ -3143,6 +3154,7 @@ function MoreActionsModal({
   offlineImageProgress,
   onClose,
   onOpenBookshelf,
+  onAddToQueue,
   onOpenDetail,
   onOpenExclusions,
   onOpenMarks,
@@ -3209,6 +3221,12 @@ function MoreActionsModal({
           <SheetAction
             label="作品詳細を開く"
             onPress={onOpenDetail}
+            palette={palette}
+          />
+          <SheetAction
+            disabled={!canOrganize}
+            label="読む順番に追加"
+            onPress={onAddToQueue}
             palette={palette}
           />
           <SheetAction

@@ -38,8 +38,11 @@ import {
   listBookshelfNovels,
   listBookshelves,
   listReaderMarks,
+  listReadingQueue,
   moveBookshelfNovel,
+  moveReadingQueueNovel,
   removeNovelFromBookshelf,
+  removeNovelFromReadingQueue,
   renameBookshelf,
   setNovelInBookshelf,
   type Bookshelf,
@@ -65,6 +68,7 @@ import { type AppColors, useAppTheme } from '@/theme';
 
 type LibraryMode =
   | 'history'
+  | 'queue'
   | 'shelves'
   | 'marks'
   | 'offline'
@@ -163,6 +167,13 @@ export function LibraryView({
             sort: historySort,
           }),
         );
+        setMarks([]);
+        setContentMutes([]);
+        return;
+      }
+
+      if (mode === 'queue') {
+        setItems(await listReadingQueue());
         setMarks([]);
         setContentMutes([]);
         return;
@@ -353,6 +364,10 @@ export function LibraryView({
         }
       } else if (mode === 'offline') {
         await deleteOfflineNovels(ids);
+      } else if (mode === 'queue') {
+        for (const novelId of ids) {
+          await removeNovelFromReadingQueue(novelId);
+        }
       } else if (mode === 'shelves' && selectedShelfId) {
         for (const novelId of ids) {
           await removeNovelFromBookshelf(selectedShelfId, novelId);
@@ -401,6 +416,19 @@ export function LibraryView({
   ) {
     if (!selectedShelfId) return;
     await moveBookshelfNovel(selectedShelfId, novelId, direction);
+    await loadItems();
+  }
+
+  async function moveInQueue(
+    novelId: number,
+    direction: 'up' | 'down',
+  ) {
+    await moveReadingQueueNovel(novelId, direction);
+    await loadItems();
+  }
+
+  async function removeFromQueue(novelId: number) {
+    await removeNovelFromReadingQueue(novelId);
     await loadItems();
   }
 
@@ -512,6 +540,11 @@ export function LibraryView({
           active={mode === 'history'}
           label="履歴"
           onPress={() => changeMode('history')}
+        />
+        <LibraryModeButton
+          active={mode === 'queue'}
+          label="読む順番"
+          onPress={() => changeMode('queue')}
         />
         <LibraryModeButton
           active={mode === 'shelves'}
@@ -810,10 +843,18 @@ export function LibraryView({
               onLongPress={() => toggleSelected(item.novelId)}
               onSelect={() => toggleSelected(item.novelId)}
               onTagPress={onTagPress}
-              canMoveDown={mode === 'shelves' && index < items.length - 1}
-              canMoveUp={mode === 'shelves' && index > 0}
-              onMoveDown={() => void moveInShelf(item.novelId, 'down')}
-              onMoveUp={() => void moveInShelf(item.novelId, 'up')}
+              canMoveDown={(mode === 'shelves' || mode === 'queue') && index < items.length - 1}
+              canMoveUp={(mode === 'shelves' || mode === 'queue') && index > 0}
+              onMoveDown={() =>
+                void (mode === 'queue'
+                  ? moveInQueue(item.novelId, 'down')
+                  : moveInShelf(item.novelId, 'down'))
+              }
+              onMoveUp={() =>
+                void (mode === 'queue'
+                  ? moveInQueue(item.novelId, 'up')
+                  : moveInShelf(item.novelId, 'up'))
+              }
               onOpen={() => {
                 if (isSelectionMode) {
                   toggleSelected(item.novelId);
@@ -824,8 +865,10 @@ export function LibraryView({
               onRemove={
                 mode === 'offline'
                   ? () => void removeOffline(item.novelId)
-                  : mode === 'shelves'
-                    ? () => void removeFromShelf(item.novelId)
+                  : mode === 'queue'
+                    ? () => void removeFromQueue(item.novelId)
+                    : mode === 'shelves'
+                      ? () => void removeFromShelf(item.novelId)
                     : mode === 'history'
                       ? () => void removeHistory(item.novelId)
                       : undefined
@@ -1462,6 +1505,13 @@ function getEmptyMessage(
       icon: '🕘',
       title: '条件に合う履歴はありません',
       description: '小説を読むと、ここから続きへ戻れます。',
+    };
+  }
+  if (mode === 'queue') {
+    return {
+      icon: '▶',
+      title: '読む順番は空です',
+      description: '読書画面の「…」から作品を追加できます。',
     };
   }
   if (mode === 'offline') {

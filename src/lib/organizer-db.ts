@@ -19,6 +19,11 @@ export interface BookshelfNovel extends LibraryNovel {
   sortOrder: number;
 }
 
+export interface ReadingQueueNovel extends LibraryNovel {
+  addedAt: number;
+  sortOrder: number;
+}
+
 export interface ReaderMark {
   id: number;
   novelId: number;
@@ -117,6 +122,13 @@ async function getOrganizerDatabase(): Promise<SQLiteDatabase> {
           FOREIGN KEY (shelf_id) REFERENCES bookshelves(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS reading_queue (
+          novel_id INTEGER PRIMARY KEY NOT NULL,
+          detail_json TEXT NOT NULL,
+          added_at INTEGER NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0
+        );
+
         CREATE TABLE IF NOT EXISTS reader_marks (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           novel_id INTEGER NOT NULL,
@@ -147,6 +159,8 @@ async function getOrganizerDatabase(): Promise<SQLiteDatabase> {
           ON bookshelf_items(shelf_id, added_at DESC);
         CREATE INDEX IF NOT EXISTS bookshelf_items_order_idx
           ON bookshelf_items(shelf_id, sort_order ASC);
+        CREATE INDEX IF NOT EXISTS reading_queue_order_idx
+          ON reading_queue(sort_order ASC, added_at ASC);
         CREATE INDEX IF NOT EXISTS reader_marks_novel_idx
           ON reader_marks(novel_id, updated_at DESC);
         CREATE INDEX IF NOT EXISTS reader_marks_updated_idx
@@ -438,6 +452,102 @@ export async function listBookshelfNovels(
       items.push({
         ...mapDetailToLibraryNovel(detail, row),
         shelfId: row.shelf_id,
+        addedAt: row.added_at,
+        sortOrder: row.sort_order,
+      });
+    } catch {
+      // 壊れた1件だけを除外する。
+    }
+  }
+  return items;
+}
+
+export async function addNovelToReadingQueue(
+  detail: PixivNovelItem,
+): Promise<void> {
+  const database = await getOrganizerDatabase();
+  const nextOrder = await database.getFirstAsync<{ next_order: number }>(`
+    SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM reading_queue
+  `);
+  await database.runAsync(
+    `
+      INSERT INTO reading_queue (novel_id, detail_json, added_at, sort_order)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(novel_id) DO UPDATE SET detail_json = excluded.detail_json
+    `,
+    detail.id,
+    JSON.stringify(detail),
+    Date.now(),
+    nextOrder?.next_order ?? 0,
+  );
+}
+
+export async function removeNovelFromReadingQueue(novelId: number): Promise<void> {
+  const database = await getOrganizerDatabase();
+  await database.runAsync('DELETE FROM reading_queue WHERE novel_id = ?', novelId);
+}
+
+export async function moveReadingQueueNovel(
+  novelId: number,
+  direction: 'up' | 'down',
+): Promise<void> {
+  const database = await getOrganizerDatabase();
+  await database.withTransactionAsync(async () => {
+    const rows = await database.getAllAsync<{
+      novel_id: number;
+      sort_order: number;
+    }>(`
+      SELECT novel_id, sort_order FROM reading_queue
+      ORDER BY sort_order ASC, added_at ASC, novel_id ASC
+    `);
+    const index = rows.findIndex((row) => row.novel_id === novelId);
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (index < 0 || targetIndex < 0 || targetIndex >= rows.length) return;
+    const current = rows[index];
+    const target = rows[targetIndex];
+    await database.runAsync(
+      'UPDATE reading_queue SET sort_order = ? WHERE novel_id = ?',
+      target.sort_order,
+      current.novel_id,
+    );
+    await database.runAsync(
+      'UPDATE reading_queue SET sort_order = ? WHERE novel_id = ?',
+      current.sort_order,
+      target.novel_id,
+    );
+  });
+}
+
+export async function listReadingQueue(limit = 300): Promise<ReadingQueueNovel[]> {
+  const database = await getOrganizerDatabase();
+  const rows = await database.getAllAsync<BookshelfItemRow>(
+    `
+      SELECT
+        0 AS shelf_id,
+        q.detail_json,
+        q.added_at,
+        q.sort_order,
+        h.progress,
+        h.scroll_offset,
+        h.is_finished,
+        h.last_read_at,
+        CASE WHEN o.novel_id IS NULL THEN 0 ELSE 1 END AS is_offline,
+        o.saved_at
+      FROM reading_queue q
+      LEFT JOIN reading_history h ON h.novel_id = q.novel_id
+      LEFT JOIN offline_novels o ON o.novel_id = q.novel_id
+      ORDER BY q.sort_order ASC, q.added_at ASC
+      LIMIT ?
+    `,
+    Math.max(1, Math.min(500, limit)),
+  );
+
+  const items: ReadingQueueNovel[] = [];
+  for (const row of rows) {
+    try {
+      const detail = JSON.parse(row.detail_json) as PixivNovelItem;
+      items.push({
+        ...mapDetailToLibraryNovel(detail, row),
         addedAt: row.added_at,
         sortOrder: row.sort_order,
       });

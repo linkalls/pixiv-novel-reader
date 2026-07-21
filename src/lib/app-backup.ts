@@ -40,6 +40,7 @@ const BACKUP_TABLES = [
   'offline_novels',
   'bookshelves',
   'bookshelf_items',
+  'reading_queue',
   'reader_marks',
   'recommendation_exclusions',
   'reading_sessions',
@@ -508,6 +509,7 @@ const TABLE_COLUMNS: Record<BackupTableName, string[]> = {
     'added_at',
     'sort_order',
   ],
+  reading_queue: ['novel_id', 'detail_json', 'added_at', 'sort_order'],
   reader_marks: [
     'id',
     'novel_id',
