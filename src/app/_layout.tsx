@@ -8,6 +8,7 @@ import { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 
 import { runAutomaticBackupIfDue } from '@/lib/app-backup';
+import { registerBackgroundSync } from '@/lib/background-sync';
 import { configureAppNotifications } from '@/lib/app-notifications';
 import { subscribePixivRefreshToken } from '@/lib/pixiv';
 import { AppThemeProvider, useAppTheme } from '@/theme';
@@ -46,6 +47,7 @@ function RootNavigator() {
 
   useEffect(() => {
     void configureAppNotifications().catch(() => {});
+    void registerBackgroundSync().catch(() => {});
     void runAutomaticBackupIfDue().catch(() => {});
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {

@@ -1,12 +1,13 @@
 {
   "name": "pixiv-novel-reader",
   "main": "expo-router/entry",
-  "version": "2.5.14",
+  "version": "2.5.15",
   "dependencies": {
     "@book000/pixivts": "^0.61.2",
     "@expo/ui": "~57.0.7",
     "@react-native-community/slider": "5.2.0",
     "expo": "~57.0.7",
+    "expo-background-task": "~57.0.5",
     "expo-brightness": "~57.0.1",
     "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.6",
@@ -32,6 +33,7 @@
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.1",
     "expo-system-ui": "~57.0.1",
+    "expo-task-manager": "~57.0.2",
     "expo-web-browser": "~57.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
