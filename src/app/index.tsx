@@ -9,7 +9,6 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -42,9 +41,6 @@ import {
 } from '@/lib/content-preferences-db';
 import {
   checkForAppUpdate,
-  CURRENT_RELEASE_HIGHLIGHTS,
-  getCurrentAppVersion,
-  getReleasesUrl,
   markUpdateNotified,
   type AppUpdateInfo,
 } from '@/lib/app-update';
@@ -55,11 +51,7 @@ import {
   openUnknownAppInstallSettings,
   type DownloadedUpdateApk,
 } from '@/lib/app-installer';
-import {
-  isNewContentNotificationEnabled,
-  notifyNewContent,
-  setNewContentNotificationEnabled,
-} from '@/lib/app-notifications';
+import { notifyNewContent } from '@/lib/app-notifications';
 import { processOfflineDownloadQueue } from '@/lib/offline-download-queue';
 import { syncOfflineSeriesSubscriptions } from '@/lib/offline-series-subscriptions';
 import { subscribeNovelChanged } from '@/lib/novel-events';
@@ -87,7 +79,7 @@ import {
   setSearchHistoryPinned,
   type SearchHistoryItem,
 } from '@/lib/search-history-db';
-import { type AppColors, type ThemeMode, useAppTheme } from '@/theme';
+import { type AppColors, useAppTheme } from '@/theme';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
 const FOLLOWING_NEWEST_AT_KEY = 'following-feed-newest-at';
@@ -160,19 +152,17 @@ const SEARCH_TARGET_OPTIONS: { value: NovelSearchTarget; label: string }[] = [
   { value: 'title_and_caption', label: 'タイトル・説明' },
 ];
 
-const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
-  { value: 'system', label: '端末設定' },
-  { value: 'light', label: 'ライト' },
-  { value: 'dark', label: 'ダーク' },
-];
-
 export default function HomeScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ tag?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    tab?: string | string[];
+    tag?: string | string[];
+  }>();
   const requestedTag = Array.isArray(params.tag) ? params.tag[0] : params.tag;
+  const requestedTab = Array.isArray(params.tab) ? params.tab[0] : params.tab;
   const handledTagRef = useRef<string | null>(null);
   const tagSearchModeRef = useRef(false);
-  const { colors, isDark, mode: themeMode, setMode: setThemeMode } = useAppTheme();
+  const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [activeTab, setActiveTab] = useState<AppTab>('recommended');
   const [feeds, setFeeds] = useState<Record<AppTab, FeedState>>({
@@ -200,15 +190,12 @@ export default function HomeScreen() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoginVisible, setIsLoginVisible] = useState(false);
-  const [isSettingsVisible, setIsSettingsVisible] = useState(false);
-  const [appUpdateInfo, setAppUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [, setAppUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false);
-  const [updateDownloadProgress, setUpdateDownloadProgress] = useState(0);
+  const [, setUpdateDownloadProgress] = useState(0);
   const [downloadedUpdateApk, setDownloadedUpdateApk] =
     useState<DownloadedUpdateApk | null>(null);
-  const [isNewContentNotificationOn, setIsNewContentNotificationOn] = useState(false);
-  const [isNotificationSaving, setIsNotificationSaving] = useState(false);
   const [showManualToken, setShowManualToken] = useState(false);
   const [manualToken, setManualToken] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -591,6 +578,18 @@ export default function HomeScreen() {
   );
 
   useEffect(() => {
+    if (requestedTab !== 'library') {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setActiveTab('library');
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [requestedTab]);
+
+  useEffect(() => {
     if (
       isBooting ||
       !isAuthenticated ||
@@ -698,25 +697,6 @@ export default function HomeScreen() {
     };
   }, [connectWithToken]);
 
-  async function toggleNewContentNotifications() {
-    if (isNotificationSaving) return;
-    setIsNotificationSaving(true);
-    try {
-      const enabled = await setNewContentNotificationEnabled(
-        !isNewContentNotificationOn,
-      );
-      setIsNewContentNotificationOn(enabled);
-      if (!enabled && !isNewContentNotificationOn) {
-        Alert.alert(
-          '通知を有効にできませんでした',
-          '端末の通知権限を確認してください。',
-        );
-      }
-    } finally {
-      setIsNotificationSaving(false);
-    }
-  }
-
   function promptAppUpdate(info: AppUpdateInfo) {
     const canInstallDirectly = Platform.OS === 'android' && info.apkAsset !== null;
     Alert.alert(
@@ -823,31 +803,6 @@ export default function HomeScreen() {
     } finally {
       setIsCheckingUpdate(false);
     }
-  }
-
-  async function handleLogout() {
-    disconnectPixiv();
-    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY).catch(() => {});
-    setIsSettingsVisible(false);
-    setIsAuthenticated(false);
-    setUserId(null);
-    setAuthError(null);
-    const resetFeeds: Record<AppTab, FeedState> = {
-      recommended: { ...EMPTY_FEED },
-      following: { ...EMPTY_FEED },
-      bookmarks: { ...EMPTY_FEED },
-      ranking: { ...EMPTY_FEED },
-      search: { ...EMPTY_FEED },
-      library: { ...EMPTY_FEED, hasLoaded: true },
-    };
-    feedsRef.current = resetFeeds;
-    submittedSearchRef.current = null;
-    inFlightPagesRef.current.clear();
-    for (const tab of Object.keys(feedRequestVersionRef.current) as AppTab[]) {
-      feedRequestVersionRef.current[tab] += 1;
-    }
-    setReadingStatuses({});
-    setFeeds(resetFeeds);
   }
 
   function selectTab(tab: AppTab) {
@@ -996,9 +951,6 @@ export default function HomeScreen() {
   useEffect(() => {
     const frameId = requestAnimationFrame(() => {
       void checkAppUpdate(false);
-      void isNewContentNotificationEnabled()
-        .then(setIsNewContentNotificationOn)
-        .catch(() => {});
     });
     return () => cancelAnimationFrame(frameId);
     // 初回起動時だけ実行し、日次制限はapp-update側で管理する。
@@ -1234,7 +1186,7 @@ export default function HomeScreen() {
           accessibilityLabel="設定"
           accessibilityRole="button"
           onPress={() => {
-            setIsSettingsVisible(true);
+            router.push('/settings');
           }}
           style={({ pressed }) => [
             styles.settingsButton,
@@ -1522,255 +1474,6 @@ export default function HomeScreen() {
         visible={isAdvancedSearchVisible}
       />
 
-      <Modal
-        animationType="fade"
-        onRequestClose={() => {
-          setIsSettingsVisible(false);
-        }}
-        transparent
-        visible={isSettingsVisible}
-      >
-        <Pressable
-          onPress={() => {
-            setIsSettingsVisible(false);
-          }}
-          style={styles.modalBackdrop}
-        >
-          <Pressable onPress={() => {}} style={styles.settingsCard}>
-            <View style={styles.settingsHeader}>
-              <View>
-                <Text style={styles.settingsEyebrow}>APP SETTINGS</Text>
-                <Text style={styles.settingsTitle}>設定</Text>
-              </View>
-              <Pressable
-                accessibilityLabel="設定を閉じる"
-                accessibilityRole="button"
-                onPress={() => setIsSettingsVisible(false)}
-                style={({ pressed }) => [
-                  styles.settingsCloseButton,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text style={styles.settingsCloseText}>×</Text>
-              </Pressable>
-            </View>
-            <ScrollView
-              contentContainerStyle={styles.settingsContent}
-              showsVerticalScrollIndicator={false}
-            >
-            <Text style={styles.settingsSectionTitle}>アカウント</Text>
-            <Text style={styles.settingsDescription}>
-              {userId === null
-                ? 'オフラインモードで利用中'
-                : `Pixivへ接続済み · userId ${userId}`}
-            </Text>
-            <Text style={styles.settingsNote}>
-              認証情報は端末内だけに保存されます。ログアウトするとrefresh tokenを削除します。
-            </Text>
-            <View style={styles.settingsDivider} />
-            <Text style={styles.settingsSectionTitle}>表示テーマ</Text>
-            <View style={styles.chipRow}>
-              {THEME_OPTIONS.map((option) => (
-                <FilterChip
-                  active={themeMode === option.value}
-                  key={option.value}
-                  label={option.label}
-                  onPress={() => {
-                    setThemeMode(option.value);
-                  }}
-                />
-              ))}
-            </View>
-            <Text style={styles.themeStatus}>
-              現在は{isDark ? 'ダーク' : 'ライト'}表示
-            </Text>
-            <View style={styles.settingsDivider} />
-            <Text style={styles.settingsSectionTitle}>新着通知</Text>
-            <Pressable
-              accessibilityRole="switch"
-              accessibilityState={{ checked: isNewContentNotificationOn }}
-              disabled={isNotificationSaving}
-              onPress={() => void toggleNewContentNotifications()}
-              style={({ pressed }) => [
-                styles.notificationRow,
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={styles.notificationTextArea}>
-                <Text style={styles.notificationTitle}>
-                  フォロー新着・シリーズ新話
-                </Text>
-                <Text style={styles.notificationDescription}>
-                  アプリ起動時と復帰時に新着を検出した場合だけ通知します。
-                </Text>
-              </View>
-              <View
-                style={[
-                  styles.settingsSwitchTrack,
-                  isNewContentNotificationOn && styles.settingsSwitchTrackActive,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.settingsSwitchThumb,
-                    isNewContentNotificationOn && styles.settingsSwitchThumbActive,
-                  ]}
-                />
-              </View>
-            </Pressable>
-
-            <View style={styles.settingsDivider} />
-            <Text style={styles.settingsSectionTitle}>ライブラリとデータ</Text>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                setIsSettingsVisible(false);
-                selectTab('library');
-              }}
-              style={({ pressed }) => [
-                styles.settingsActionRow,
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={styles.settingsActionTextArea}>
-                <Text style={styles.settingsActionTitle}>ライブラリ管理</Text>
-                <Text style={styles.settingsActionDescription}>
-                  履歴、本棚、しおり、保存作品、統計、バックアップ
-                </Text>
-              </View>
-              <Text style={styles.settingsActionArrow}>›</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                Alert.alert(
-                  '検索履歴を削除',
-                  'ピン留めした検索は残し、通常の検索履歴だけ削除します。',
-                  [
-                    { text: 'キャンセル', style: 'cancel' },
-                    {
-                      text: '削除',
-                      style: 'destructive',
-                      onPress: () => void clearSearchHistory(),
-                    },
-                  ],
-                );
-              }}
-              style={({ pressed }) => [
-                styles.settingsActionRow,
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={styles.settingsActionTextArea}>
-                <Text style={styles.settingsActionTitle}>検索履歴を整理</Text>
-                <Text style={styles.settingsActionDescription}>
-                  ピン留め以外の履歴を削除
-                </Text>
-              </View>
-              <Text style={styles.settingsActionArrow}>›</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                void cleanupInstalledUpdateApk().then(() => {
-                  Alert.alert('整理完了', '古い更新用APKを削除しました。');
-                });
-              }}
-              style={({ pressed }) => [
-                styles.settingsActionRow,
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={styles.settingsActionTextArea}>
-                <Text style={styles.settingsActionTitle}>更新ファイルを整理</Text>
-                <Text style={styles.settingsActionDescription}>
-                  インストール済みの古いAPKを削除
-                </Text>
-              </View>
-              <Text style={styles.settingsActionArrow}>›</Text>
-            </Pressable>
-
-            <View style={styles.settingsDivider} />
-            <View style={styles.updateHeader}>
-              <View>
-                <Text style={styles.settingsSectionTitle}>アプリ情報</Text>
-                <Text style={styles.updateVersion}>現在 v{getCurrentAppVersion()}</Text>
-              </View>
-              {appUpdateInfo?.hasUpdate ? (
-                <View style={styles.updateBadge}>
-                  <Text style={styles.updateBadgeText}>v{appUpdateInfo.latestVersion}</Text>
-                </View>
-              ) : null}
-            </View>
-            <View style={styles.changelogCard}>
-              {CURRENT_RELEASE_HIGHLIGHTS.map((highlight) => (
-                <View key={highlight} style={styles.changelogRow}>
-                  <Text style={styles.changelogBullet}>•</Text>
-                  <Text style={styles.changelogText}>{highlight}</Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.updateActions}>
-              <Pressable
-                accessibilityRole="button"
-                disabled={isCheckingUpdate || isInstallingUpdate}
-                onPress={() => {
-                  if (appUpdateInfo?.hasUpdate) {
-                    void installAppUpdate(appUpdateInfo);
-                  } else {
-                    void checkAppUpdate(true);
-                  }
-                }}
-                style={({ pressed }) => [
-                  styles.updateCheckButton,
-                  (isCheckingUpdate || isInstallingUpdate) && styles.disabled,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text style={styles.updateCheckText}>
-                  {isCheckingUpdate
-                    ? '確認中…'
-                    : isInstallingUpdate
-                      ? `ダウンロード中 ${Math.round(updateDownloadProgress * 100)}%`
-                      : appUpdateInfo?.hasUpdate
-                        ? downloadedUpdateApk?.version === appUpdateInfo.latestVersion
-                          ? 'インストールを再開'
-                          : `v${appUpdateInfo.latestVersion}へ更新`
-                        : '更新を確認'}
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="link"
-                onPress={() =>
-                  void Linking.openURL(
-                    appUpdateInfo?.releaseUrl ?? getReleasesUrl(),
-                  )
-                }
-                style={({ pressed }) => [
-                  styles.releaseButton,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text style={styles.releaseButtonText}>Release一覧</Text>
-              </Pressable>
-            </View>
-
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                void handleLogout();
-              }}
-              style={({ pressed }) => [
-                styles.logoutButton,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={styles.logoutButtonText}>ログアウト</Text>
-            </Pressable>
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
     </SafeAreaView>
   );
 }
