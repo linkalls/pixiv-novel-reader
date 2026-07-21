@@ -137,8 +137,12 @@ interface EmbeddedNovelPayload {
   illusts?: unknown;
 }
 
+const TRANSIENT_RETRY_DELAYS_MS = [500, 1_500] as const;
+
 let currentClient: PixivClient | null = null;
 let recoveryPromise: Promise<PixivClient> | null = null;
+let restorePromise: Promise<PixivClient> | null = null;
+let lastKnownRefreshToken: string | null = null;
 let lastNotifiedRefreshToken: string | null = null;
 const refreshTokenListeners = new Set<
   (refreshToken: string) => void | Promise<void>
@@ -176,6 +180,7 @@ export async function connectPixiv(refreshToken: string): Promise<PixivSession> 
   }
 
   currentClient = await createPixivClient(normalizedToken);
+  lastKnownRefreshToken = currentClient.getRefreshToken();
   notifyRefreshToken(currentClient);
 
   return getSession(currentClient);
@@ -184,6 +189,8 @@ export async function connectPixiv(refreshToken: string): Promise<PixivSession> 
 export function disconnectPixiv(): void {
   currentClient = null;
   recoveryPromise = null;
+  restorePromise = null;
+  lastKnownRefreshToken = null;
   lastNotifiedRefreshToken = null;
 }
 
@@ -497,7 +504,6 @@ export async function fetchNovelComments(
   }
 
   const cursor = nextUrl ? parseNextUrl(nextUrl) : {};
-  const client = requireClient();
   const parameters = new URLSearchParams({
     novel_id: String(novelId),
     include_total_comments: 'true',
@@ -507,18 +513,20 @@ export async function fetchNovelComments(
     parameters.set('offset', String(cursor.offset));
   }
 
-  const response = await fetch(
-    `https://app-api.pixiv.net/v1/novel/comments?${parameters.toString()}`,
-    {
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${client.getAccessToken()}`,
-        'App-OS': 'android',
-        'App-OS-Version': '17',
-        'User-Agent': 'PixivAndroidApp/6.135.0 (Android 17)',
-      },
-    },
-  );
+  let client = await ensurePixivClient();
+  let response = await fetchNovelCommentsResponse(client, parameters);
+
+  if ([400, 401, 403].includes(response.status)) {
+    client = await recoverPixivClient(client);
+    response = await fetchNovelCommentsResponse(client, parameters);
+  }
+
+  for (const delayMs of TRANSIENT_RETRY_DELAYS_MS) {
+    if (![408, 429].includes(response.status) && response.status < 500) break;
+    await sleep(delayMs);
+    client = await ensurePixivClient();
+    response = await fetchNovelCommentsResponse(client, parameters);
+  }
 
   if (!response.ok) {
     throw new Error(`コメントを取得できませんでした (${response.status})`);
@@ -542,6 +550,28 @@ export async function fetchNovelComments(
     totalComments:
       typeof payload.total_comments === 'number' ? payload.total_comments : null,
   };
+}
+
+async function fetchNovelCommentsResponse(
+  client: PixivClient,
+  parameters: URLSearchParams,
+): Promise<Response> {
+  try {
+    return await fetch(
+      `https://app-api.pixiv.net/v1/novel/comments?${parameters.toString()}`,
+      {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${client.getAccessToken()}`,
+          'App-OS': 'android',
+          'App-OS-Version': '17',
+          'User-Agent': 'PixivAndroidApp/6.135.0 (Android 17)',
+        },
+      },
+    );
+  } catch (error) {
+    throw new Error(`コメント通信に失敗しました: ${toErrorMessage(error)}`);
+  }
 }
 
 function mapNovelComment(value: unknown): NovelComment | null {
@@ -983,7 +1013,7 @@ async function createPixivClient(refreshToken: string): Promise<PixivClient> {
 async function performPixivRequest<T>(
   operation: PixivOperation<T>,
 ): Promise<T> {
-  let client = requireClient();
+  let client = await ensurePixivClient();
   let result = await operation(client);
 
   if (result.isErr && shouldRecoverSession(result.error)) {
@@ -995,6 +1025,13 @@ async function performPixivRequest<T>(
         'Pixiv認証を更新できませんでした。設定から再ログインしてください',
       );
     }
+  }
+
+  for (const delayMs of TRANSIENT_RETRY_DELAYS_MS) {
+    if (!result.isErr || !isTransientPixivError(result.error)) break;
+    await sleep(delayMs);
+    client = await ensurePixivClient();
+    result = await operation(client);
   }
 
   if (result.isErr) {
@@ -1140,6 +1177,41 @@ function isPixivSearchDuration(
   value: string | null,
 ): value is PixivSearchDuration {
   return Object.values(SearchDuration).some((candidate) => candidate === value);
+}
+
+async function ensurePixivClient(): Promise<PixivClient> {
+  if (currentClient) return currentClient;
+  if (!lastKnownRefreshToken) {
+    throw new Error('Pixivへ再ログインしてください');
+  }
+
+  if (!restorePromise) {
+    restorePromise = createPixivClient(lastKnownRefreshToken)
+      .then((client) => {
+        currentClient = client;
+        lastKnownRefreshToken = client.getRefreshToken();
+        notifyRefreshToken(client);
+        return client;
+      })
+      .finally(() => {
+        restorePromise = null;
+      });
+  }
+
+  return restorePromise;
+}
+
+function isTransientPixivError(error: PixivError): boolean {
+  if (error.type !== 'api_error') return false;
+  return error.status === 408 || error.status === 429 || error.status >= 500;
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function requireClient(): PixivClient {
