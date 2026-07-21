@@ -68,6 +68,31 @@ export interface NovelSeriesResult {
   refreshToken: string;
 }
 
+export interface NovelCommentUser {
+  id: number;
+  name: string;
+  account: string;
+  profileImageUrls: {
+    medium: string;
+  };
+}
+
+export interface NovelComment {
+  id: number;
+  comment: string;
+  date: string;
+  user: NovelCommentUser;
+  hasReplies?: boolean;
+  parentComment?: NovelComment | Record<string, never>;
+}
+
+export interface NovelCommentsResult {
+  comments: NovelComment[];
+  nextUrl: string | null;
+  refreshToken: string;
+  totalComments: number | null;
+}
+
 export interface UserProfileResult {
   profile: PixivUserProfile;
   profilePublicity: PixivUserProfilePublicity;
@@ -461,6 +486,100 @@ export async function fetchNovelDetail(
     client.novels.detail({ novelId }),
   );
   return detail.novel;
+}
+
+export async function fetchNovelComments(
+  novelId: number,
+  nextUrl?: string | null,
+): Promise<NovelCommentsResult> {
+  if (!Number.isInteger(novelId) || novelId <= 0) {
+    throw new Error('作品IDが不正です');
+  }
+
+  const cursor = nextUrl ? parseNextUrl(nextUrl) : {};
+  const client = requireClient();
+  const parameters = new URLSearchParams({
+    novel_id: String(novelId),
+    include_total_comments: 'true',
+  });
+
+  if (cursor.offset !== undefined) {
+    parameters.set('offset', String(cursor.offset));
+  }
+
+  const response = await fetch(
+    `https://app-api.pixiv.net/v1/novel/comments?${parameters.toString()}`,
+    {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${client.getAccessToken()}`,
+        'App-OS': 'android',
+        'App-OS-Version': '17',
+        'User-Agent': 'PixivAndroidApp/6.135.0 (Android 17)',
+      },
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`コメントを取得できませんでした (${response.status})`);
+  }
+
+  const payload = (await response.json()) as {
+    comments?: unknown;
+    next_url?: unknown;
+    total_comments?: unknown;
+  };
+  const comments = Array.isArray(payload.comments)
+    ? payload.comments
+        .map(mapNovelComment)
+        .filter((comment): comment is NovelComment => comment !== null)
+    : [];
+
+  return {
+    comments,
+    nextUrl: typeof payload.next_url === 'string' ? payload.next_url : null,
+    refreshToken: client.getRefreshToken(),
+    totalComments:
+      typeof payload.total_comments === 'number' ? payload.total_comments : null,
+  };
+}
+
+function mapNovelComment(value: unknown): NovelComment | null {
+  if (!isRecord(value) || !isRecord(value.user)) {
+    return null;
+  }
+
+  const id = Number(value.id);
+  const userId = Number(value.user.id);
+
+  if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(userId) || userId <= 0) {
+    return null;
+  }
+
+  const profileImageUrls = isRecord(value.user.profile_image_urls)
+    ? value.user.profile_image_urls
+    : {};
+  const parentComment = mapNovelComment(value.parent_comment);
+
+  return {
+    id,
+    comment: typeof value.comment === 'string' ? value.comment : '',
+    date: typeof value.date === 'string' ? value.date : '',
+    user: {
+      id: userId,
+      name: typeof value.user.name === 'string' ? value.user.name : String(userId),
+      account: typeof value.user.account === 'string' ? value.user.account : '',
+      profileImageUrls: {
+        medium:
+          typeof profileImageUrls.medium === 'string'
+            ? profileImageUrls.medium
+            : '',
+      },
+    },
+    hasReplies:
+      typeof value.has_replies === 'boolean' ? value.has_replies : undefined,
+    parentComment: parentComment ?? {},
+  };
 }
 
 export async function fetchUserProfile(

@@ -522,7 +522,7 @@ export default function NovelDetailScreen() {
               pressed && styles.pressed,
             ]}
           >
-            <Text style={styles.secondaryActionText}>💬 コメント・リアクション</Text>
+            <Text style={styles.secondaryActionText}>💬 コメント</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
@@ -613,7 +613,13 @@ ${url}`,
         muted={colors.textMuted}
         novelId={novelId}
         onClose={() => setIsInteractionVisible(false)}
-        overlay={colors.overlay}
+        onUserPress={(userId) => {
+          setIsInteractionVisible(false);
+          router.push({
+            pathname: '/user/[id]',
+            params: { id: String(userId) },
+          });
+        }}
         text={colors.text}
         visible={isInteractionVisible}
       />

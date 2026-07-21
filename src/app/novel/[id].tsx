@@ -2022,7 +2022,13 @@ export default function NovelReaderScreen() {
         muted={palette.muted}
         novelId={novelId}
         onClose={() => setIsInteractionVisible(false)}
-        overlay={palette.overlay}
+        onUserPress={(userId) => {
+          setIsInteractionVisible(false);
+          router.push({
+            pathname: '/user/[id]',
+            params: { id: String(userId) },
+          });
+        }}
         text={palette.text}
         visible={isInteractionVisible}
       />
@@ -3218,7 +3224,7 @@ function MoreActionsModal({
             palette={palette}
           />
           <SheetAction
-            label="コメント・リアクション"
+            label="コメント"
             onPress={onOpenInteractions}
             palette={palette}
           />
