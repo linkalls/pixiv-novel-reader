@@ -10,10 +10,17 @@ import { AppState } from 'react-native';
 import { runAutomaticBackupIfDue } from '@/lib/app-backup';
 import { registerBackgroundSync } from '@/lib/background-sync';
 import { configureAppNotifications } from '@/lib/app-notifications';
-import { subscribePixivRefreshToken } from '@/lib/pixiv';
+import {
+  setPixivRefreshTokenLoader,
+  subscribePixivRefreshToken,
+} from '@/lib/pixiv';
 import { AppThemeProvider, useAppTheme } from '@/theme';
 
 const REFRESH_TOKEN_KEY = 'pixiv-refresh-token';
+
+setPixivRefreshTokenLoader(() =>
+  SecureStore.getItemAsync(REFRESH_TOKEN_KEY),
+);
 
 export default function RootLayout() {
   return (

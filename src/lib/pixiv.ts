@@ -143,6 +143,7 @@ let currentClient: PixivClient | null = null;
 let recoveryPromise: Promise<PixivClient> | null = null;
 let restorePromise: Promise<PixivClient> | null = null;
 let lastKnownRefreshToken: string | null = null;
+let refreshTokenLoader: (() => Promise<string | null>) | null = null;
 let lastNotifiedRefreshToken: string | null = null;
 const refreshTokenListeners = new Set<
   (refreshToken: string) => void | Promise<void>
@@ -152,6 +153,12 @@ const refreshTokenListeners = new Set<
  * Pixiv側でrefresh tokenがローテーションされたときに通知する。
  * ルートレイアウト側でSecureStoreへ保存し、画面遷移中も最新tokenを失わない。
  */
+export function setPixivRefreshTokenLoader(
+  loader: (() => Promise<string | null>) | null,
+): void {
+  refreshTokenLoader = loader;
+}
+
 export function subscribePixivRefreshToken(
   listener: (refreshToken: string) => void | Promise<void>,
 ): () => void {
@@ -1181,21 +1188,23 @@ function isPixivSearchDuration(
 
 async function ensurePixivClient(): Promise<PixivClient> {
   if (currentClient) return currentClient;
-  if (!lastKnownRefreshToken) {
-    throw new Error('Pixivへ再ログインしてください');
-  }
 
   if (!restorePromise) {
-    restorePromise = createPixivClient(lastKnownRefreshToken)
-      .then((client) => {
-        currentClient = client;
-        lastKnownRefreshToken = client.getRefreshToken();
-        notifyRefreshToken(client);
-        return client;
-      })
-      .finally(() => {
-        restorePromise = null;
-      });
+    restorePromise = (async () => {
+      const refreshToken =
+        lastKnownRefreshToken ?? (await refreshTokenLoader?.()) ?? null;
+      if (!refreshToken) {
+        throw new Error('Pixivへ再ログインしてください');
+      }
+
+      const client = await createPixivClient(refreshToken);
+      currentClient = client;
+      lastKnownRefreshToken = client.getRefreshToken();
+      notifyRefreshToken(client);
+      return client;
+    })().finally(() => {
+      restorePromise = null;
+    });
   }
 
   return restorePromise;
