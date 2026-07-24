@@ -55,7 +55,7 @@ export function PixivNovelInteractionModal({
     setErrorMessage(null);
     try {
       const page = await fetchNovelComments(novelId);
-      setComments(page.comments);
+      setComments(mergeComments([], page.comments));
       setNextUrl(page.nextUrl);
       setTotalComments(page.totalComments);
     } catch (error) {
@@ -139,19 +139,67 @@ export function PixivNovelInteractionModal({
   );
 }
 
-function CommentCard({ comment, onUserPress, styles }: { comment: NovelComment; onUserPress: (userId: number) => void; styles: ReturnType<typeof createStyles> }) {
-  const parent = isNovelComment(comment.parentComment) ? comment.parentComment : null;
+function CommentCard({
+  comment,
+  onUserPress,
+  styles,
+}: {
+  comment: NovelComment;
+  onUserPress: (userId: number) => void;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const parent = isNovelComment(comment.parentComment)
+    ? comment.parentComment
+    : null;
+
   return (
-    <View style={[styles.commentCard, parent && styles.replyCard]}>
-      {parent ? <View style={styles.parentPreview}><Text numberOfLines={1} style={styles.parentName}>返信先: {parent.user.name}</Text><Text numberOfLines={2} style={styles.parentText}>{parent.comment}</Text></View> : null}
-      <Pressable accessibilityRole="link" onPress={() => onUserPress(comment.user.id)} style={({ pressed }) => [styles.userRow, pressed && styles.pressed]}>
-        <Image contentFit="cover" source={{ uri: comment.user.profileImageUrls.medium, headers: { Referer: 'https://app-api.pixiv.net/' } }} style={styles.avatar} transition={120} />
-        <View style={styles.userText}><Text numberOfLines={1} style={styles.userName}>{comment.user.name}</Text><Text style={styles.dateText}>{formatCommentDate(comment.date)}</Text></View>
-        <Text style={styles.userArrow}>›</Text>
+    <View style={styles.commentCard}>
+      <Pressable
+        accessibilityLabel={`${comment.user.name}のプロフィールを開く`}
+        accessibilityRole="link"
+        onPress={() => onUserPress(comment.user.id)}
+        style={({ pressed }) => [styles.userRow, pressed && styles.pressed]}
+      >
+        <Image
+          contentFit="cover"
+          source={{
+            uri: comment.user.profileImageUrls.medium,
+            headers: { Referer: 'https://app-api.pixiv.net/' },
+          }}
+          style={styles.avatar}
+          transition={120}
+        />
+        <View style={styles.userText}>
+          <Text maxFontSizeMultiplier={1.25} numberOfLines={1} style={styles.userName}>
+            {comment.user.name}
+          </Text>
+          <Text maxFontSizeMultiplier={1.2} style={styles.dateText}>
+            {formatCommentDate(comment.date)}
+          </Text>
+        </View>
+        <Text maxFontSizeMultiplier={1.2} style={styles.userArrow}>›</Text>
       </Pressable>
-      <Text selectable style={styles.commentText}>{comment.comment}</Text>
+
+      {parent ? (
+        <View style={styles.replyContext}>
+          <Text maxFontSizeMultiplier={1.2} numberOfLines={1} style={styles.replyLabel}>
+            ↳ {parent.user.name}への返信
+          </Text>
+          <Text maxFontSizeMultiplier={1.2} numberOfLines={1} style={styles.replyExcerpt}>
+            {normalizeCommentExcerpt(parent.comment)}
+          </Text>
+        </View>
+      ) : null}
+
+      <Text maxFontSizeMultiplier={1.35} selectable style={styles.commentText}>
+        {comment.comment}
+      </Text>
     </View>
   );
+}
+
+function normalizeCommentExcerpt(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 function isNovelComment(value: NovelComment['parentComment']): value is NovelComment {
@@ -188,19 +236,18 @@ function createStyles(colors: { accent: string; background: string; border: stri
     errorText: { color: colors.muted, fontSize: 12, lineHeight: 19, textAlign: 'center' },
     retryButton: { minWidth: 170, minHeight: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: colors.accent },
     retryButtonText: { color: colors.background, fontSize: 13, fontWeight: '900' },
-    listContent: { width: '100%', maxWidth: 760, alignSelf: 'center', padding: 14, paddingBottom: 48, gap: 10 },
-    commentCard: { gap: 10, padding: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: 16, backgroundColor: colors.background },
-    replyCard: { marginLeft: 18, borderLeftWidth: 3, borderLeftColor: colors.accent },
-    parentPreview: { gap: 3, padding: 9, borderRadius: 10, backgroundColor: colors.border },
-    parentName: { color: colors.accent, fontSize: 10, fontWeight: '900' },
-    parentText: { color: colors.muted, fontSize: 11, lineHeight: 17 },
-    userRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    avatar: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.border },
-    userText: { flex: 1, minWidth: 0, gap: 2 },
-    userName: { color: colors.text, fontSize: 13, fontWeight: '900' },
-    dateText: { color: colors.muted, fontSize: 9, fontWeight: '600' },
-    userArrow: { color: colors.accent, fontSize: 22, fontWeight: '800' },
-    commentText: { color: colors.text, fontSize: 14, lineHeight: 22 },
+    listContent: { width: '100%', maxWidth: 760, alignSelf: 'center', paddingHorizontal: 12, paddingTop: 12, paddingBottom: 48, gap: 8 },
+    commentCard: { gap: 11, paddingHorizontal: 13, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, backgroundColor: colors.background },
+    userRow: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 10 },
+    avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.border },
+    userText: { flex: 1, minWidth: 0, gap: 1 },
+    userName: { color: colors.text, fontSize: 13, fontWeight: '800' },
+    dateText: { color: colors.muted, fontSize: 10, fontWeight: '600' },
+    userArrow: { color: colors.muted, fontSize: 20, fontWeight: '700', paddingHorizontal: 2 },
+    replyContext: { gap: 2, marginLeft: 46, paddingLeft: 9, borderLeftWidth: 2, borderLeftColor: colors.border },
+    replyLabel: { color: colors.accent, fontSize: 10, fontWeight: '800' },
+    replyExcerpt: { color: colors.muted, fontSize: 10, lineHeight: 15 },
+    commentText: { color: colors.text, fontSize: 14, lineHeight: 21, paddingLeft: 46 },
     emptyState: { alignItems: 'center', gap: 7, paddingVertical: 70 },
     emptyTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
     emptyText: { color: colors.muted, fontSize: 12 },
