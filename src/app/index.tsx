@@ -1,5 +1,6 @@
 import type { PixivNovelItem } from '@book000/pixivts';
 import * as Linking from 'expo-linking';
+import * as Network from 'expo-network';
 import * as SecureStore from 'expo-secure-store';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -697,6 +698,50 @@ export default function HomeScreen() {
     };
   }, [connectWithToken]);
 
+  useEffect(() => {
+    const isOfflineMode =
+      isAuthenticated && userId === null && authError !== null;
+    if (!isOfflineMode) return;
+
+    let isCancelled = false;
+
+    async function reconnectWhenOnline() {
+      if (isCancelled || connectingRef.current) return;
+
+      try {
+        const networkState = await Network.getNetworkStateAsync();
+        if (
+          !networkState.isConnected ||
+          networkState.isInternetReachable === false
+        ) {
+          return;
+        }
+
+        const savedToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+        if (!savedToken || isCancelled) return;
+        await connectWithToken(savedToken, { allowOffline: true });
+      } catch {
+        // 接続確認は次回の監視周期で再試行する。
+      }
+    }
+
+    void reconnectWhenOnline();
+    const interval = setInterval(() => {
+      void reconnectWhenOnline();
+    }, 5_000);
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void reconnectWhenOnline();
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+      appStateSubscription.remove();
+    };
+  }, [authError, connectWithToken, isAuthenticated, userId]);
+
   function promptAppUpdate(info: AppUpdateInfo) {
     const canInstallDirectly = Platform.OS === 'android' && info.apkAsset !== null;
     Alert.alert(
@@ -1197,11 +1242,15 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
-      {userId === null && authError ? (
+      {userId === null && isAuthenticated ? (
         <View style={styles.offlineModeBanner}>
-          <Text style={styles.offlineModeTitle}>オフラインモード</Text>
+          <Text style={styles.offlineModeTitle}>
+            {isConnecting ? 'オンラインへ復帰中…' : 'オフラインモード'}
+          </Text>
           <Text numberOfLines={2} style={styles.offlineModeText}>
-            保存済み本文と読書履歴を利用できます。通信の復旧後にアプリを再起動してください。
+            {isConnecting
+              ? '接続を確認してPixivの内容を更新しています。'
+              : '保存済み本文と読書履歴を利用できます。接続が戻ると自動でオンラインへ復帰します。'}
           </Text>
         </View>
       ) : null}
